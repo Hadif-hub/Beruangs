@@ -5,6 +5,14 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Space Grotesk", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-bear-dark: #3E2723;
+  --color-bear-brown: #8B5A2B;
+  --color-bear-latte: #F3E5D8;
+  --color-bear-khaki: #C39B6F;
+  --color-bear-sand: #FAF5EF;
+  --color-bear-light: #FBF9F6;
+  --color-bear-clay: #A0522D;
 }
 
 html {

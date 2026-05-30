@@ -1,127 +1,56 @@
 {
   "entities": {
-    "activityLog": {
-      "title": "Activity Log",
-      "description": "A secure telemetry log record owned by an authenticated user.",
+    "bearPost": {
+      "title": "Bear Post / Note",
+      "description": "Represents either a public platform post (with caption, image, emoji reactions) or a private note owned strictly by a user.",
       "type": "object",
       "properties": {
         "userId": {
           "type": "string",
-          "description": "UID of the owner compiled from firebase authentications."
+          "description": "UID of the owner linked to Firebase Authentication."
         },
-        "action": {
+        "userDisplayName": {
           "type": "string",
-          "description": "A succinct title describing the security or operational handshake event."
+          "description": "Public name of the user who drafted the bear post."
         },
-        "timestamp": {
+        "userPhotoURL": {
           "type": "string",
-          "format": "date-time",
-          "description": "ISO timestamp indicating when the telemetry event was captured."
+          "description": "Public profile picture / bear avatar representing the author."
         },
-        "details": {
+        "caption": {
           "type": "string",
-          "description": "Verbose insights or context associated with the event."
+          "description": "Markdown or clear text caption content of this post or private note."
         },
-        "origin": {
+        "imageUrl": {
           "type": "string",
-          "description": "The specific client or edge server where this log originated."
-        }
-      },
-      "required": ["userId", "action", "timestamp", "details", "origin"]
-    },
-    "apiKey": {
-      "title": "API Keys",
-      "description": "Fully interactive secure external cryptographic keys belonging to authenticated users.",
-      "type": "object",
-      "properties": {
-        "userId": {
-          "type": "string"
+          "description": "The custom image URL or select pre-configured bear photo representing this entry."
         },
-        "name": {
-          "type": "string"
+        "isPublic": {
+          "type": "boolean",
+          "description": "True if the item is displayed on the public reddit-like homepage feed. False if kept privately as notes."
         },
-        "keyToken": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string"
-        },
-        "createdAt": {
-          "type": "string"
-        }
-      },
-      "required": ["userId", "name", "keyToken", "status", "createdAt"]
-    },
-    "userSetting": {
-      "title": "User Global Configuration",
-      "description": "Console global parameters customizable per member.",
-      "type": "object",
-      "properties": {
-        "strictSecureHandshakes": {
-          "type": "boolean"
-        },
-        "telemetryPipeline": {
-          "type": "boolean"
-        },
-        "originNode": {
-          "type": "string"
-        },
-        "maxRateLimit": {
-          "type": "integer"
-        },
-        "alertEmail": {
-          "type": "string"
-        }
-      },
-      "required": ["strictSecureHandshakes", "telemetryPipeline", "originNode", "maxRateLimit", "alertEmail"]
-    },
-    "personalNote": {
-      "title": "Personal Note",
-      "description": "A private, customizable text note strictly owned and managed by the logged-in user.",
-      "type": "object",
-      "properties": {
-        "userId": {
-          "type": "string",
-          "description": "UID of the owner linked to Google Authentication."
-        },
-        "title": {
-          "type": "string",
-          "description": "Title of the note."
-        },
-        "content": {
-          "type": "string",
-          "description": "The rich or plain-text body content of the note."
+        "reactions": {
+          "type": "object",
+          "description": "A map listing selected emojis paired to lists of user UIDs who reacted with that emoji (e.g., {'🐻': ['uid1', 'uid2']})."
         },
         "createdAt": {
           "type": "string",
           "format": "date-time",
-          "description": "When the note was first drafted."
+          "description": "ISO timestamp indicating when the post was first created."
         },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
-          "description": "When the note was last altered."
+          "description": "ISO timestamp indicating when the post was last modified."
         }
       },
-      "required": ["userId", "title", "content", "createdAt", "updatedAt"]
+      "required": ["userId", "userDisplayName", "userPhotoURL", "caption", "imageUrl", "isPublic", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
-    "activity_logs/{logId}": {
-      "schema": "activityLog",
-      "description": "Collection of telemetry operational activity logs tracked per authenticated developer user."
-    },
-    "api_keys/{keyId}": {
-      "schema": "apiKey",
-      "description": "Secure API Keys configured by the user."
-    },
-    "user_settings/{userId}": {
-      "schema": "userSetting",
-      "description": "Interactive settings document uniquely stored using the users' UID."
-    },
-    "personal_notes/{noteId}": {
-      "schema": "personalNote",
-      "description": "Strictly restricted notes collection where authenticated users edit and retrieve private workspace notes."
+    "bear_posts/{postId}": {
+      "schema": "bearPost",
+      "description": "Curated collection of public bear posts and private bear work notes, secured with granular Attribute-Based Access Control rules."
     }
   }
 }

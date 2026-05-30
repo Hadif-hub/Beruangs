@@ -1,6 +1,6 @@
 {
-  "name": "Auth Portal Landing Page",
-  "description": "A elegant light-themed security portal featuring a comprehensive interactive authentication module and responsive premium landing design.",
+  "name": "BeruangsBear",
+  "description": "BeruangsBear - A curated reddit-like social platform and personal workspace revolving strictly around bears, styled in beautiful forest and latte bear browns.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

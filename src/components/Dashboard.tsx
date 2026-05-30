@@ -1,1584 +1,827 @@
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { 
-  ShieldCheck, 
-  User as UserIcon, 
-  Activity, 
-  Settings, 
-  LogOut, 
-  Key, 
-  Database, 
-  CloudLightning, 
-  Server, 
-  TrendingUp, 
-  Plus, 
-  RefreshCw, 
-  Trash2,
-  AlertCircle,
-  FileText,
-  Edit,
-  Save,
-  BookOpen
-} from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
-import { db, auth } from "../firebase";
+import { db } from "../firebase";
 import { 
   collection, 
+  addDoc, 
+  getDocs, 
   query, 
   where, 
-  getDocs, 
-  addDoc, 
   doc, 
   deleteDoc, 
-  getDocFromServer,
-  getDoc,
-  setDoc
+  setDoc,
+  orderBy
 } from "firebase/firestore";
+import { BEAR_TEMPLATES, BearTemplate } from "../data/bearTemplates";
+import BearLogo from "./BearLogo";
+import { 
+  Globe, 
+  Lock, 
+  Plus, 
+  Trash2, 
+  Edit3, 
+  Save, 
+  X, 
+  FolderLock, 
+  Flame, 
+  LogOut, 
+  ArrowLeft,
+  RefreshCw,
+  Sparkles,
+  Link as LinkIcon
+} from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 
-// Types for personalized data
-interface UserActivityLog {
+interface BearEntity {
   id: string;
   userId: string;
-  action: string;
-  timestamp: string;
-  details: string;
-  origin: string;
-}
-
-interface UserInsights {
-  apiCallsThisMonth: number;
-  availableKeys: number;
-  usagePercentage: number;
-  activeNodes: number;
-}
-
-interface UserApiKey {
-  id: string;
-  userId: string;
-  name: string;
-  keyToken: string;
-  status: "Active" | "Revoked";
-  createdAt: string;
-}
-
-interface PersonalNote {
-  id: string;
-  userId: string;
-  title: string;
-  content: string;
+  userDisplayName: string;
+  userPhotoURL: string;
+  caption: string;
+  imageUrl: string;
+  isPublic: boolean;
+  reactions: { [key: string]: string[] };
   createdAt: string;
   updatedAt: string;
 }
 
-interface GlobalSettings {
-  strictSecureHandshakes: boolean;
-  telemetryPipeline: boolean;
-  originNode: string;
-  maxRateLimit: number;
-  alertEmail: string;
-}
-
-const defaultSettings: GlobalSettings = {
-  strictSecureHandshakes: true,
-  telemetryPipeline: true,
-  originNode: "Asia-Southeast Cloud Node",
-  maxRateLimit: 5000,
-  alertEmail: "denmasaklomak@gmail.com"
-};
-
-// -------------------------------------------------------------
-// FIRESTORE ERROR HANDLING SPECIFICATION (ABAC Compliance)
-// -------------------------------------------------------------
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid || null,
-      email: auth.currentUser?.email || null,
-      emailVerified: auth.currentUser?.emailVerified || null,
-      isAnonymous: auth.currentUser?.isAnonymous || null,
-      tenantId: auth.currentUser?.tenantId || null,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-/**
- * Validates connection to firestore initially on mount
- */
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'handshake'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration: Client is offline.");
-    }
-  }
-}
-
-/**
- * ASYNC FIRESTORE DATA FETCHING PATTERN
- * Retrieving personalized database content based on the logged-in user's UID
- */
-export async function fetchUserData(uid: string): Promise<{ 
-  logs: UserActivityLog[]; 
-  insights: UserInsights;
-  apiKeys: UserApiKey[];
-  settings: GlobalSettings;
-  notes: PersonalNote[];
-}> {
-  const path = "activity_logs";
-  try {
-    // 1. Fetching Telemetry Logs (No orderBy query to completely bypass index requirement!)
-    const logsRef = collection(db, path);
-    const q = query(logsRef, where("userId", "==", uid));
-    const querySnapshot = await getDocs(q);
-    
-    let realLogs = querySnapshot.docs.map(docSnapshot => {
-      const data = docSnapshot.data();
-      return {
-        id: docSnapshot.id,
-        userId: data.userId || uid,
-        action: data.action || "",
-        timestamp: data.timestamp || "",
-        details: data.details || "",
-        origin: data.origin || "",
-      } as UserActivityLog;
-    });
-
-    // In-memory sort to completely sidestep index requirement!
-    realLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-    if (realLogs.length === 0) {
-      const defaultLogs = [
-        {
-          userId: uid,
-          action: "Access Security Handshake",
-          timestamp: new Date(Date.now() - 4 * 60000).toISOString(),
-          details: "Successfully validated session cookie token in browser security frame.",
-          origin: "Local Client Connection"
-        },
-        {
-          userId: uid,
-          action: "Regenerated Developer API Token",
-          timestamp: new Date(Date.now() - 3 * 3600000).toISOString(),
-          details: "Regenerated security credential under stratosync-default channel.",
-          origin: "Asia-Southeast Cloud Node"
-        }
-      ];
-
-      for (const logItem of defaultLogs) {
-        const docRef = await addDoc(collection(db, "activity_logs"), logItem);
-        realLogs.push({
-          id: docRef.id,
-          ...logItem
-        });
-      }
-      
-      realLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    }
-
-    // 2. Fetching API keys
-    const keysRef = collection(db, "api_keys");
-    const qKeys = query(keysRef, where("userId", "==", uid));
-    const keysSnapshot = await getDocs(qKeys);
-    let realKeys = keysSnapshot.docs.map(docSnapshot => {
-      const data = docSnapshot.data();
-      return {
-        id: docSnapshot.id,
-        userId: data.userId || uid,
-        name: data.name || "",
-        keyToken: data.keyToken || "",
-        status: data.status || "Active",
-        createdAt: data.createdAt || "",
-      } as UserApiKey;
-    });
-
-    if (realKeys.length === 0) {
-      const defaultKeys = [
-        {
-          userId: uid,
-          name: "Console Command Access Key",
-          keyToken: `stratosync_live_dev_${uid.slice(0, 10)}${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-          status: "Active" as const,
-          createdAt: new Date(Date.now() - 24 * 3600000).toISOString()
-        }
-      ];
-
-      for (const keyItem of defaultKeys) {
-        const docRef = await addDoc(keysRef, keyItem);
-        realKeys.push({
-          id: docRef.id,
-          ...keyItem
-        });
-      }
-    }
-
-    realKeys.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-    // 3. Fetching User Global Settings
-    const settingsDocRef = doc(db, "user_settings", uid);
-    const settingsSnapshot = await getDoc(settingsDocRef);
-    let currentSettings = { ...defaultSettings };
-
-    if (settingsSnapshot.exists()) {
-      currentSettings = settingsSnapshot.data() as GlobalSettings;
-    } else {
-      await setDoc(settingsDocRef, defaultSettings);
-    }
-
-    // 4. Fetching Personal Notes
-    const notesRef = collection(db, "personal_notes");
-    const qNotes = query(notesRef, where("userId", "==", uid));
-    const notesSnapshot = await getDocs(qNotes);
-    let realNotes = notesSnapshot.docs.map(docSnapshot => {
-      const data = docSnapshot.data();
-      return {
-        id: docSnapshot.id,
-        userId: data.userId || uid,
-        title: data.title || "",
-        content: data.content || "",
-        createdAt: data.createdAt || "",
-        updatedAt: data.updatedAt || "",
-      } as PersonalNote;
-    });
-
-    if (realNotes.length === 0) {
-      const defaultNotes = [
-        {
-          userId: uid,
-          title: "Setup & Console Guidelines",
-          content: "Welcome to your personal developer journal. Keep track of your infrastructure adjustments, telemetry logs, and security parameters here.\n\nOnly your authenticated user ID has read or write permissions to these notes, backed by Firestore enterprise security rules.",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }
-      ];
-
-      for (const noteItem of defaultNotes) {
-        const docRef = await addDoc(notesRef, noteItem);
-        realNotes.push({
-          id: docRef.id,
-          ...noteItem
-        });
-      }
-    }
-
-    realNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-
-    // Compute active insights based on logs length and active keys list
-    const stringVal = uid.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const mockInsights: UserInsights = {
-      apiCallsThisMonth: (stringVal * 3) % 450 + 120 + realLogs.length,
-      availableKeys: realKeys.filter(k => k.status === "Active").length,
-      usagePercentage: Math.min((stringVal % 40) + 35 + Math.floor(realLogs.length / 2), 100),
-      activeNodes: (stringVal % 4) + 1,
-    };
-
-    return { 
-      logs: realLogs, 
-      insights: mockInsights, 
-      apiKeys: realKeys, 
-      settings: currentSettings,
-      notes: realNotes
-    };
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-    throw error;
-  }
-}
-
 export default function Dashboard() {
   const { user, signOut } = useAuth();
-  const [activeTab, setActiveTab] = useState<"insights" | "logs" | "keys" | "settings" | "notes">("insights");
-  
-  // Dashboard states
+  const navigate = useNavigate();
+
+  // Loaders & Alerts
   const [loading, setLoading] = useState<boolean>(true);
-  const [logs, setLogs] = useState<UserActivityLog[]>([]);
-  const [insights, setInsights] = useState<UserInsights | null>(null);
-  const [apiKeys, setApiKeys] = useState<UserApiKey[]>([]);
-  const [settings, setSettings] = useState<GlobalSettings>(defaultSettings);
-  
-  // Interactive inputs
-  const [newAction, setNewAction] = useState<string>("");
-  const [newDetails, setNewDetails] = useState<string>("");
-  const [newOrigin, setNewOrigin] = useState<string>("Local Client Connection");
-  const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Search/Filters
-  const [logsSearchText, setLogsSearchText] = useState<string>("");
-  const [logsOriginFilter, setLogsOriginFilter] = useState<string>("All");
+  // User's private notes and public posts
+  const [myBearEntries, setMyBearEntries] = useState<BearEntity[]>([]);
+  const [activeTab, setActiveTab] = useState<"posts" | "notes">("posts");
 
-  // Key form states
-  const [newKeyName, setNewKeyName] = useState<string>("");
-  const [newKeyPrefix, setNewKeyPrefix] = useState<"stratosync_live_dev" | "stratosync_webhook_sign">("stratosync_live_dev");
+  // Editorial draft state
+  const [caption, setCaption] = useState<string>("");
+  const [imageUrl, setImageUrl] = useState<string>(BEAR_TEMPLATES[0].imageUrl);
+  const [isPublic, setIsPublic] = useState<boolean>(true);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(BEAR_TEMPLATES[0].id);
+  const [customUrlInput, setCustomUrlInput] = useState<string>("");
+  const [isCustomUrlActive, setIsCustomUrlActive] = useState<boolean>(false);
 
-  // Dynamic user thresholds for insights customization
-  const [targetEdgeCallsLimit, setTargetEdgeCallsLimit] = useState<number>(300);
+  // Editing state for existing entry
+  const [editingEntry, setEditingEntry] = useState<BearEntity | null>(null);
+  const [editCaption, setEditCaption] = useState<string>("");
+  const [editImageUrl, setEditImageUrl] = useState<string>("");
+  const [editIsPublic, setEditIsPublic] = useState<boolean>(true);
 
-  // Global settings local form state
-  const [editingStrictSecureHandshakes, setEditingStrictSecureHandshakes] = useState<boolean>(true);
-  const [editingTelemetryPipeline, setEditingTelemetryPipeline] = useState<boolean>(true);
-  const [editingOriginNode, setEditingOriginNode] = useState<string>("");
-  const [editingMaxRateLimit, setEditingMaxRateLimit] = useState<number>(5000);
-  const [editingAlertEmail, setEditingAlertEmail] = useState<string>("");
-  const [settingsSubmitting, setSettingsSubmitting] = useState<boolean>(false);
-
-  // Personal Notes states
-  const [notes, setNotes] = useState<PersonalNote[]>([]);
-  const [selectedNote, setSelectedNote] = useState<PersonalNote | null>(null);
-  const [noteTitle, setNoteTitle] = useState<string>("");
-  const [noteContent, setNoteContent] = useState<string>("");
-  const [noteSaving, setNoteSaving] = useState<boolean>(false);
-  const [noteDeleting, setNoteDeleting] = useState<string | null>(null);
-  const [notesSearch, setNotesSearch] = useState<string>("");
-
-  // Load initial personalized data
-  const loadDashboardData = async () => {
+  // Load user's entries
+  const fetchMyEntries = async () => {
     if (!user) return;
     try {
       setLoading(true);
-      setErrorNotice(null);
-      // Validate secure Firestore handshakes
-      await testConnection();
-      const data = await fetchUserData(user.uid);
-      setLogs(data.logs);
-      setInsights(data.insights);
-      setApiKeys(data.apiKeys);
-      setSettings(data.settings);
-      setNotes(data.notes);
-
-      // Populate interactive editing states
-      setEditingStrictSecureHandshakes(data.settings.strictSecureHandshakes);
-      setEditingTelemetryPipeline(data.settings.telemetryPipeline);
-      setEditingOriginNode(data.settings.originNode);
-      setEditingMaxRateLimit(data.settings.maxRateLimit);
-      setEditingAlertEmail(data.settings.alertEmail);
-
-      // Auto-select first note if available we have any notes
-      if (data.notes && data.notes.length > 0) {
-        setSelectedNote(data.notes[0]);
-        setNoteTitle(data.notes[0].title);
-        setNoteContent(data.notes[0].content);
-      } else {
-        setSelectedNote(null);
-        setNoteTitle("");
-        setNoteContent("");
-      }
+      setErrorMsg(null);
+      const postRef = collection(db, "bear_posts");
+      const q = query(postRef, where("userId", "==", user.uid));
+      const querySnapshot = await getDocs(q);
+      
+      const list: BearEntity[] = [];
+      querySnapshot.forEach((docSnap) => {
+        const d = docSnap.data();
+        list.push({
+          id: docSnap.id,
+          userId: d.userId || "",
+          userDisplayName: d.userDisplayName || "Anonymous Bear",
+          userPhotoURL: d.userPhotoURL || "",
+          caption: d.caption || "",
+          imageUrl: d.imageUrl || "",
+          isPublic: d.isPublic === undefined ? true : d.isPublic,
+          reactions: d.reactions || {},
+          createdAt: d.createdAt || new Date().toISOString(),
+          updatedAt: d.updatedAt || new Date().toISOString(),
+        });
+      });
+      
+      // Sort locally descending
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setMyBearEntries(list);
     } catch (err: any) {
-      setErrorNotice(err?.message || "Failed to establish secure telemetry database connection.");
+      console.error("Error retrieving bear entries:", err);
+      setErrorMsg("Unable to retrieve your personal entries. Please reload.");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadDashboardData();
+    fetchMyEntries();
   }, [user]);
 
-  // Handle adding custom logs safely
-  const handleAddNewLog = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newAction || !user) return;
-
-    setLoading(true);
-    try {
-      const addedLogPayload = {
-        userId: user.uid,
-        action: newAction,
-        timestamp: new Date().toISOString(),
-        details: newDetails || "Implicit client-triggered security log event.",
-        origin: newOrigin || "Active UI Session Frame"
-      };
-
-      const docRef = await addDoc(collection(db, "activity_logs"), addedLogPayload);
-      const addedLog: UserActivityLog = {
-        id: docRef.id,
-        ...addedLogPayload
-      };
-
-      setLogs((prev) => [addedLog, ...prev]);
-      
-      // Update insights partially to show active progress
-      if (insights) {
-        setInsights({
-          ...insights,
-          apiCallsThisMonth: insights.apiCallsThisMonth + 1,
-        });
-      }
-
-      setNewAction("");
-      setNewDetails("");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, "activity_logs");
-    } finally {
-      setLoading(false);
-    }
+  // Handle template selection
+  const selectTemplate = (tpl: BearTemplate) => {
+    setIsCustomUrlActive(false);
+    setSelectedTemplateId(tpl.id);
+    setImageUrl(tpl.imageUrl);
   };
 
-  // Handle deleting custom logs safely
-  const handleDeleteLog = async (id: string) => {
-    setLoading(true);
-    try {
-      await deleteDoc(doc(db, "activity_logs", id));
-      setLogs((prev) => prev.filter((log) => log.id !== id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `activity_logs/${id}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Generate new secret keys
-  const handleGenerateKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKeyName || !user) return;
-
-    setLoading(true);
-    try {
-      const randomSeed = Math.random().toString(36).substring(2, 6).toUpperCase();
-      const randomVal = Math.random().toString(36).substring(2, 10).toUpperCase();
-      const generatedToken = `${newKeyPrefix}_${user.uid.slice(0, 8)}${randomSeed}_${randomVal}`;
-
-      const keyPayload = {
-        userId: user.uid,
-        name: newKeyName,
-        keyToken: generatedToken,
-        status: "Active" as const,
-        createdAt: new Date().toISOString()
-      };
-
-      const docRef = await addDoc(collection(db, "api_keys"), keyPayload);
-      const newKey: UserApiKey = {
-        id: docRef.id,
-        ...keyPayload
-      };
-
-      setApiKeys((prev) => [newKey, ...prev]);
-
-      // Record telemetry log
-      const logPayload = {
-        userId: user.uid,
-        action: `Generated Dynamic API Key`,
-        timestamp: new Date().toISOString(),
-        details: `Created new access token reference: "${newKeyName}" (${newKeyPrefix}).`,
-        origin: "Security System Portal"
-      };
-      const logRef = await addDoc(collection(db, "activity_logs"), logPayload);
-      setLogs((prev) => [{ id: logRef.id, ...logPayload }, ...prev]);
-
-      setNewKeyName("");
-
-      if (insights) {
-        setInsights({
-          ...insights,
-          availableKeys: insights.availableKeys + 1
-        });
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, "api_keys");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Toggle API Key state
-  const handleToggleKeyStatus = async (keyId: string, currentStatus: "Active" | "Revoked") => {
-    setLoading(true);
-    try {
-      const nextStatus = currentStatus === "Active" ? "Revoked" : "Active";
-      const keyRef = doc(db, "api_keys", keyId);
-      const targetDoc = apiKeys.find(k => k.id === keyId);
-      if (!targetDoc) return;
-
-      const updatedPayload = { ...targetDoc, status: nextStatus };
-      const { id, ...payloadWithoutId } = updatedPayload;
-      
-      await setDoc(keyRef, payloadWithoutId);
-      setApiKeys((prev) => prev.map(k => k.id === keyId ? { ...k, status: nextStatus } : k));
-
-      // Record a telemetry log
-      const logPayload = {
-        userId: user!.uid,
-        action: `API Credentials Updated`,
-        timestamp: new Date().toISOString(),
-        details: `Modified access token state for "${targetDoc.name}" to: ${nextStatus}.`,
-        origin: "Security System Portal"
-      };
-      const logRef = await addDoc(collection(db, "activity_logs"), logPayload);
-      setLogs((prev) => [{ id: logRef.id, ...logPayload }, ...prev]);
-
-      if (insights) {
-        setInsights({
-          ...insights,
-          availableKeys: nextStatus === "Active" ? insights.availableKeys + 1 : Math.max(0, insights.availableKeys - 1)
-        });
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `api_keys/${keyId}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Permanently erase API key
-  const handleDeleteKey = async (keyId: string) => {
-    if (!confirm("Are you sure you want to permanently erase this API key?")) return;
-    setLoading(true);
-    try {
-      const targetDoc = apiKeys.find(k => k.id === keyId);
-      if (!targetDoc) return;
-
-      await deleteDoc(doc(db, "api_keys", keyId));
-      setApiKeys((prev) => prev.filter(k => k.id !== keyId));
-
-      // Record a telemetry log
-      const logPayload = {
-        userId: user!.uid,
-        action: `Permanently Revoked Access Token`,
-        timestamp: new Date().toISOString(),
-        details: `Deleted credential handle for "${targetDoc.name}".`,
-        origin: "Security System Portal"
-      };
-      const logRef = await addDoc(collection(db, "activity_logs"), logPayload);
-      setLogs((prev) => [{ id: logRef.id, ...logPayload }, ...prev]);
-
-      if (insights && targetDoc.status === "Active") {
-        setInsights({
-          ...insights,
-          availableKeys: Math.max(0, insights.availableKeys - 1)
-        });
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `api_keys/${keyId}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Save Settings
-  const handleSaveSettings = async (e: React.FormEvent) => {
+  // Submit Draft
+  const handleCreateEntry = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-
-    setSettingsSubmitting(true);
-    try {
-      const newSettings: GlobalSettings = {
-        strictSecureHandshakes: editingStrictSecureHandshakes,
-        telemetryPipeline: editingTelemetryPipeline,
-        originNode: editingOriginNode,
-        maxRateLimit: Number(editingMaxRateLimit),
-        alertEmail: editingAlertEmail
-      };
-
-      const settingsDocRef = doc(db, "user_settings", user.uid);
-      await setDoc(settingsDocRef, newSettings);
-      setSettings(newSettings);
-
-      // Record a telemetry log
-      const logPayload = {
-        userId: user.uid,
-        action: `Configured Global Parameters`,
-        timestamp: new Date().toISOString(),
-        details: `Console options saved. Host node: "${editingOriginNode}", Max speed: ${editingMaxRateLimit} ev/s, Alerts recipient: "${editingAlertEmail}".`,
-        origin: "Global System Settings"
-      };
-      const logRef = await addDoc(collection(db, "activity_logs"), logPayload);
-      setLogs((prev) => [{ id: logRef.id, ...logPayload }, ...prev]);
-
-      alert("Console configuration saved securely in Google Cloud Firestore!");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `user_settings/${user.uid}`);
-    } finally {
-      setSettingsSubmitting(false);
+    if (!caption.trim()) {
+      setErrorMsg("Please draft a description caption for your bear post!");
+      return;
     }
-  };
 
-  // Create a blank Note
-  const handleCreateNote = async () => {
-    if (!user) return;
-    setNoteSaving(true);
+    const finalImageUrl = isCustomUrlActive ? customUrlInput.trim() : imageUrl;
+    if (!finalImageUrl) {
+      setErrorMsg("Please provide an image for the bear!");
+      return;
+    }
+
     try {
-      const notePayload = {
+      setSaving(true);
+      setErrorMsg(null);
+      setSuccessMsg(null);
+
+      const entryPayload = {
         userId: user.uid,
-        title: "Untitled Note",
-        content: "",
+        userDisplayName: user.displayName || "Bear Observer",
+        userPhotoURL: user.photoURL || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${user.uid}`,
+        caption: caption.trim(),
+        imageUrl: finalImageUrl,
+        isPublic: isPublic,
+        reactions: {
+          "🐻": [],
+          "🍯": [],
+          "🐾": [],
+          "🐟": [],
+          "🌲": []
+        },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      const docRef = await addDoc(collection(db, "personal_notes"), notePayload);
-      const newNote: PersonalNote = {
-        id: docRef.id,
-        ...notePayload
-      };
-      setNotes((prev) => [newNote, ...prev]);
-      setSelectedNote(newNote);
-      setNoteTitle(newNote.title);
-      setNoteContent(newNote.content);
 
-      // Audit telemetry log
-      const logPayload = {
-        userId: user.uid,
-        action: "Drafted Personal Note",
-        timestamp: new Date().toISOString(),
-        details: `Created new secure work notes with node id ${docRef.id}.`,
-        origin: "Personal Developer Notes"
+      const docRef = await addDoc(collection(db, "bear_posts"), entryPayload);
+      
+      const newEntry: BearEntity = {
+        id: docRef.id,
+        ...entryPayload
       };
-      const logRef = await addDoc(collection(db, "activity_logs"), logPayload);
-      setLogs((prev) => [{ id: logRef.id, ...logPayload }, ...prev]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, "personal_notes");
+
+      setMyBearEntries((prev) => [newEntry, ...prev]);
+      setSuccessMsg(
+        isPublic 
+          ? "🐻 Magnificent! Your bear post has been uploaded to the public feed." 
+          : "🔒 Private note secured inside your personal reserve index."
+      );
+
+      // Reset fields
+      setCaption("");
+      setCustomUrlInput("");
+      setIsCustomUrlActive(false);
+      setSelectedTemplateId(BEAR_TEMPLATES[0].id);
+      setImageUrl(BEAR_TEMPLATES[0].imageUrl);
+    } catch (err: any) {
+      console.error("Error saving bear entry:", err);
+      setErrorMsg("Database save failed. Ensure rules permit your payload.");
     } finally {
-      setNoteSaving(false);
+      setSaving(false);
     }
   };
 
-  // Save current Note modifications
-  const handleSaveNote = async () => {
-    if (!user || !selectedNote) return;
-    setNoteSaving(true);
+  // Delete Entry
+  const handleDeleteEntry = async (id: string) => {
+    if (!confirm("Are you absolutely sure you want to delete this bear entry?")) return;
     try {
-      const updatedNote: PersonalNote = {
-        ...selectedNote,
-        title: noteTitle.trim() || "Untitled Note",
-        content: noteContent,
+      setDeletingId(id);
+      setErrorMsg(null);
+      await deleteDoc(doc(db, "bear_posts", id));
+      setMyBearEntries((prev) => prev.filter((item) => item.id !== id));
+      setSuccessMsg("Entry successfully recycled!");
+    } catch (err: any) {
+      console.error("Error deleting document:", err);
+      setErrorMsg("Failed to remove item. Unprivileged write access.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // Trigger Edit modal or mode
+  const startEdit = (entry: BearEntity) => {
+    setEditingEntry(entry);
+    setEditCaption(entry.caption);
+    setEditImageUrl(entry.imageUrl);
+    setEditIsPublic(entry.isPublic);
+  };
+
+  // Save Edits
+  const handleSaveEdits = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEntry || !user) return;
+    if (!editCaption.trim()) {
+      setErrorMsg("Caption cannot be left empty.");
+      return;
+    }
+    if (!editImageUrl.trim()) {
+      setErrorMsg("Image URL cannot be left empty.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setErrorMsg(null);
+      
+      const updatePayload = {
+        ...editingEntry,
+        caption: editCaption.trim(),
+        imageUrl: editImageUrl.trim(),
+        isPublic: editIsPublic,
         updatedAt: new Date().toISOString()
       };
 
-      const noteDocRef = doc(db, "personal_notes", selectedNote.id);
-      await setDoc(noteDocRef, {
-        userId: updatedNote.userId,
-        title: updatedNote.title,
-        content: updatedNote.content,
-        createdAt: updatedNote.createdAt,
-        updatedAt: updatedNote.updatedAt
+      // Set entire document safely to trigger validation schema rules
+      await setDoc(doc(db, "bear_posts", editingEntry.id), {
+        userId: updatePayload.userId,
+        userDisplayName: updatePayload.userDisplayName,
+        userPhotoURL: updatePayload.userPhotoURL,
+        caption: updatePayload.caption,
+        imageUrl: updatePayload.imageUrl,
+        isPublic: updatePayload.isPublic,
+        reactions: updatePayload.reactions,
+        createdAt: updatePayload.createdAt,
+        updatedAt: updatePayload.updatedAt
       });
 
-      setNotes((prev) =>
-        prev.map((n) => (n.id === selectedNote.id ? updatedNote : n))
+      setMyBearEntries((prev) =>
+        prev.map((item) => (item.id === editingEntry.id ? updatePayload : item))
       );
-      setSelectedNote(updatedNote);
-
-      // Audit telemetry log
-      const logPayload = {
-        userId: user.uid,
-        action: "Synchronized Personal Note",
-        timestamp: new Date().toISOString(),
-        details: `Saved updates to note: "${updatedNote.title}".`,
-        origin: "Personal Developer Notes"
-      };
-      const logRef = await addDoc(collection(db, "activity_logs"), logPayload);
-      setLogs((prev) => [{ id: logRef.id, ...logPayload }, ...prev]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `personal_notes/${selectedNote.id}`);
+      setSuccessMsg("Bear entry successfully synchronized with the cloud forest!");
+      setEditingEntry(null);
+    } catch (err: any) {
+      console.error("Error editing document:", err);
+      setErrorMsg("Update failed. Make sure you don't modify author identity fields.");
     } finally {
-      setNoteSaving(false);
+      setSaving(false);
     }
   };
 
-  // Delete current Note
-  const handleDeleteNote = async (noteId: string) => {
-    if (!user) return;
-    if (!confirm("Are you sure you want to permanently delete this note?")) return;
-    setNoteDeleting(noteId);
-    try {
-      await deleteDoc(doc(db, "personal_notes", noteId));
-      const remainingNotes = notes.filter((n) => n.id !== noteId);
-      setNotes(remainingNotes);
-      
-      if (selectedNote?.id === noteId) {
-        if (remainingNotes.length > 0) {
-          setSelectedNote(remainingNotes[0]);
-          setNoteTitle(remainingNotes[0].title);
-          setNoteContent(remainingNotes[0].content);
-        } else {
-          setSelectedNote(null);
-          setNoteTitle("");
-          setNoteContent("");
-        }
-      }
-
-      // Audit telemetry log
-      const logPayload = {
-        userId: user.uid,
-        action: "Purged Personal Note",
-        timestamp: new Date().toISOString(),
-        details: `Deleted notes document ID references.`,
-        origin: "Personal Developer Notes"
-      };
-      const logRef = await addDoc(collection(db, "activity_logs"), logPayload);
-      setLogs((prev) => [{ id: logRef.id, ...logPayload }, ...prev]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `personal_notes/${noteId}`);
-    } finally {
-      setNoteDeleting(null);
-    }
-  };
+  // Filter lists based on tab
+  const postsList = myBearEntries.filter((item) => item.isPublic === true);
+  const notesList = myBearEntries.filter((item) => item.isPublic === false);
 
   return (
-    <div className="flex min-h-screen bg-neutral-50/50 flex-col md:flex-row">
-      {/* PERSISTENT SIDEBAR - Restricted layout completely distinct from public index */}
-      <aside className="w-full md:w-64 bg-white border-b md:border-b-0 md:border-r border-neutral-200 flex flex-col shrink-0 select-none">
-        
-        {/* Brand Signpost */}
-        <div className="p-6 border-b border-neutral-100 flex items-center space-x-3">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/10">
-            <div className="w-3.5 h-3.5 border-2 border-white rounded-xs"></div>
-          </div>
-          <span className="font-display text-lg font-bold tracking-tight text-neutral-900">
-            Strato<span className="text-blue-600">Sync</span>
-          </span>
-          <span className="bg-neutral-100 text-neutral-600 font-mono text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-neutral-250">
-            Console
-          </span>
-        </div>
-
-        {/* User Mini Card */}
-        {user && (
-          <div className="p-4 mx-4 my-3 bg-neutral-50 border border-neutral-200/80 rounded-2xl flex items-center gap-3">
-            <img
-              src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName || "User"}`}
-              alt={user.displayName || "User Avatar"}
-              referrerPolicy="no-referrer"
-              className="w-10 h-10 rounded-full border border-neutral-200 object-cover"
-            />
-            <div className="overflow-hidden">
-              <p className="text-xs font-bold text-neutral-900 truncate">
-                {user.displayName || "Active Developer"}
-              </p>
-              <p className="text-[10px] text-neutral-500 truncate font-mono">
-                {user.email}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Sidebar Nav Actions */}
-        <nav className="flex-1 px-3 py-4 space-y-1">
-          <button
-            onClick={() => setActiveTab("insights")}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "insights"
-                ? "bg-blue-50 text-blue-700 font-bold"
-                : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-900"
-            }`}
+    <div className="min-h-screen bg-bear-sand">
+      {/* Top Professional Bear Bar */}
+      <header className="sticky top-0 z-40 bg-white border-b border-bear-latte shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div 
+            onClick={() => navigate("/")} 
+            className="flex items-center space-x-2 cursor-pointer group"
           >
-            <Activity className="h-4.5 w-4.5" />
-            <span>Dashboard Insights</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("logs")}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "logs"
-                ? "bg-blue-50 text-blue-700 font-bold"
-                : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-900"
-            }`}
-          >
-            <Database className="h-4.5 w-4.5" />
-            <span>Telemetry Logs</span>
-            {logs.length > 0 && (
-              <span className="ml-auto bg-neutral-100 text-neutral-500 font-mono text-[10px] px-2 py-0.5 rounded-full border border-neutral-200 font-bold">
-                {logs.length}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab("keys")}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "keys"
-                ? "bg-blue-50 text-blue-700 font-bold"
-                : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-900"
-            }`}
-          >
-            <Key className="h-4.5 w-4.5" />
-            <span>Security Keys</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("settings")}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "settings"
-                ? "bg-blue-50 text-blue-700 font-bold"
-                : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-900"
-            }`}
-          >
-            <Settings className="h-4.5 w-4.5" />
-            <span>Global Settings</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("notes")}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "notes"
-                ? "bg-blue-50 text-blue-700 font-bold"
-                : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-900"
-            }`}
-          >
-            <FileText className="h-4.5 w-4.5" />
-            <span>Personal Notes</span>
-            {notes.length > 0 && (
-              <span className="ml-auto bg-blue-50 text-blue-600 font-mono text-[10px] px-2 py-0.5 rounded-full border border-blue-100 font-bold animate-pulse">
-                {notes.length}
-              </span>
-            )}
-          </button>
-        </nav>
-
-        {/* Sidebar Footer Power down */}
-        <div className="p-4 border-t border-neutral-150">
-          <button
-            onClick={() => signOut()}
-            className="w-full flex items-center space-x-3 px-4 py-2.5 rounded-xl text-sm font-bold text-red-600 hover:bg-red-50/60 transition-colors cursor-pointer"
-          >
-            <LogOut className="h-4.5 w-4.5 shrink-0" />
-            <span>Disconnect Portal</span>
-          </button>
-        </div>
-      </aside>
-
-      {/* ACTIVE DASHBOARD BODY CONTAINER (Light, Premium Theme) */}
-      <main className="flex-1 flex flex-col min-w-0">
-        
-        {/* Top Header Panel bar representing active connectivity */}
-        <header className="h-16 bg-white border-b border-neutral-200/80 px-6 sm:px-8 flex items-center justify-between select-none shrink-0">
-          <div className="flex items-center space-x-4">
-            <h1 className="font-display text-lg font-bold text-neutral-900">
-              {activeTab === "insights" && "System Insights"}
-              {activeTab === "logs" && "Activity Telemetry Logs"}
-              {activeTab === "keys" && "StratoSync API Access Tokens"}
-              {activeTab === "settings" && "Console System Settings"}
-              {activeTab === "notes" && "Personal Developer Notes"}
-            </h1>
+            <BearLogo className="h-9 w-9 group-hover:scale-105 transition-transform" />
+            <span className="font-display text-xl font-extrabold text-bear-dark tracking-tight">
+              Beruangs<span className="text-bear-brown">Bear</span>
+            </span>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-3 sm:space-x-4">
             <button
-              onClick={loadDashboardData}
-              disabled={loading}
-              className="p-1.5 rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-400 hover:text-neutral-800 transition-all cursor-pointer disabled:opacity-50"
-              title="Refresh console telemetry feeds"
+              onClick={() => navigate("/")}
+              className="px-4 py-2 text-xs font-bold text-bear-brown hover:text-bear-dark transition-colors flex items-center space-x-1"
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Back To Main feed</span>
             </button>
 
-            <div className="h-4 w-[1px] bg-neutral-200"></div>
-
-            <div className="flex items-center space-x-2.5">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-              </span>
-              <span className="text-[11px] font-bold text-neutral-500 font-mono uppercase tracking-wider">
-                Console Live state
-              </span>
-            </div>
+            <button
+              onClick={signOut}
+              className="px-3.5 py-2 hover:bg-red-50 text-red-600 hover:text-red-700 text-xs font-bold rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer border border-transparent hover:border-red-100"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Stand Down</span>
+            </button>
           </div>
-        </header>
+        </div>
+      </header>
 
-        {/* Central Dashboard Scroll Area */}
-        <div className="flex-1 overflow-y-auto p-6 sm:p-8">
-          <AnimatePresence mode="wait">
-            {loading ? (
-              <motion.div
-                key="loading-skeleton"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="h-full min-h-[400px] flex flex-col items-center justify-center space-y-4"
-              >
-                <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
-                <p className="font-mono text-xs font-semibold text-neutral-400 uppercase tracking-widest">
-                  Compiling system console insights...
-                </p>
-              </motion.div>
-            ) : errorNotice ? (
-              <motion.div
-                key="error-box"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="rounded-2xl border border-red-150 bg-red-50/40 p-6 flex flex-col md:flex-row items-center gap-4 text-center md:text-left"
-              >
-                <div className="p-3 bg-red-100 rounded-xl">
-                  <AlertCircle className="h-6 w-6 text-red-600" />
-                </div>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Banner */}
+        <div className="bg-gradient-to-r from-bear-brown to-bear-clay rounded-3xl p-6 sm:p-8 text-white mb-8 shadow-md relative overflow-hidden select-none">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-2xl pointer-events-none transform translate-x-20 -translate-y-20" />
+          <div className="relative z-10 max-w-2xl text-left">
+            <div className="inline-flex items-center space-x-2 bg-white/10 px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase mb-3">
+              <Sparkles className="h-3.5 w-3.5 text-yellow-300" />
+              <span>Personal Bear Sanctuary</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-display font-black tracking-tight text-white">
+              Hello, {user?.displayName || "Fellow Bear Enthusiast"}!
+            </h1>
+            <p className="text-xs sm:text-sm text-bear-latte font-medium mt-1 leading-relaxed max-w-xl">
+              This is your customized den. Draft magnificent stories with gorgeous cover graphics, publish them as public discussions to the feed, or store them privately as protected notes.
+            </p>
+          </div>
+        </div>
+
+        {/* Status Alerts */}
+        <AnimatePresence mode="wait">
+          {errorMsg && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-700 flex items-start space-x-3 font-medium"
+            >
+              <span className="text-base select-none">⚠️</span>
+              <div>
+                <p className="font-bold">Sanctuary Alert</p>
+                <p className="opacity-90">{errorMsg}</p>
+              </div>
+              <button onClick={() => setErrorMsg(null)} className="ml-auto text-red-400 hover:text-red-700 font-bold">✕</button>
+            </motion.div>
+          )}
+
+          {successMsg && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-6 p-4 bg-emerald-55 z-20 border border-emerald-100 bg-emerald-50 rounded-2xl text-xs text-emerald-800 flex items-start space-x-3 font-medium"
+            >
+              <span className="text-base select-none">🍯</span>
+              <div>
+                <p className="font-bold">Sanctuary Sync</p>
+                <p className="opacity-90">{successMsg}</p>
+              </div>
+              <button onClick={() => setSuccessMsg(null)} className="ml-auto text-emerald-400 hover:text-emerald-700 font-bold">✕</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          {/* LEFT: Composer Deck (span 5/12) */}
+          <div className="lg:col-span-5 space-y-6">
+            <div className="bg-white border border-bear-latte rounded-3xl p-6 shadow-sm">
+              <h2 className="font-display font-black text-bear-dark text-lg mb-4 flex items-center space-x-2">
+                <span>🐻</span>
+                <span>Craft Bear Entry</span>
+              </h2>
+
+              <form onSubmit={handleCreateEntry} className="space-y-5">
+                {/* Visual Image Selector */}
                 <div>
-                  <h3 className="font-bold text-red-950 font-sans">Telemetry Handshake Error</h3>
-                  <p className="text-sm text-red-600 mt-1 max-w-lg leading-relaxed">{errorNotice}</p>
-                  <button
-                    onClick={loadDashboardData}
-                    className="mt-3 px-4 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700"
-                  >
-                    Retry Handshake
-                  </button>
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="dashboard-loaded-body"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.25 }}
-                className="space-y-8"
-              >
-                {/* 1. Personalized Welcome Banner */}
-                <div className="rounded-3xl border border-neutral-200 bg-white p-6 sm:p-8 relative overflow-hidden shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-                  <div className="absolute -top-12 -right-12 w-48 h-48 bg-blue-100/30 rounded-full blur-3xl z-0 pointer-events-none" />
-                  
-                  <div className="relative z-10">
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-bold rounded-full mb-3 uppercase tracking-wider">
-                      Developer Workspace
-                    </div>
-                    <h2 className="font-display text-2xl sm:text-3xl font-extrabold text-neutral-900 leading-tight">
-                      Welcome, {user?.displayName || "Developer Participant"}!
-                    </h2>
-                    <p className="text-neutral-500 font-sans text-sm mt-1 max-w-md font-light leading-relaxed">
-                      This space monitors your federated profile variables, edge telemetry parameters, and active configuration tokens in real-time.
-                    </p>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-bear-dark/70 uppercase">Select Bear Cover Image</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsCustomUrlActive(!isCustomUrlActive)}
+                      className="text-xs font-bold text-bear-brown hover:text-bear-dark flex items-center space-x-1"
+                    >
+                      <LinkIcon className="h-3 w-3" />
+                      <span>{isCustomUrlActive ? "Choose preset" : "Custom URL"}</span>
+                    </button>
                   </div>
 
-                  <div className="flex gap-4 shrink-0 relative z-10 font-mono text-left">
-                    <div className="border border-neutral-150 bg-neutral-50 rounded-2xl p-4 min-w-[120px]">
-                      <span className="text-[10px] font-bold text-neutral-400 block uppercase tracking-wide">Build Version</span>
-                      <span className="text-sm font-bold text-neutral-800">v4.0.12-PROD</span>
-                    </div>
-                    <div className="border border-neutral-150 bg-neutral-50 rounded-2xl p-4 min-w-[120px]">
-                      <span className="text-[10px] font-bold text-neutral-400 block uppercase tracking-wide">Environment</span>
-                      <span className="text-xs font-bold text-green-600 block mt-0.5">// CLOUD RUN</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* TAB SWITCH CONTROLLER & GRID ACTIONS */}
-                {activeTab === "insights" && insights && (
-                  <div className="space-y-8 animate-fade-in">
-
-                    {/* Live Target Edge Calls Limit selector */}
-                    <div className="bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs flex flex-col md:flex-row items-center justify-between gap-6">
-                      <div>
-                        <h4 className="text-sm font-bold text-neutral-900">Custom Monthly Telemetry Budget</h4>
-                        <p className="text-xs text-neutral-500 mt-1">Set your target cap to dynamically recalculate allocated capacity graphs.</p>
-                      </div>
-                      <div className="flex items-center gap-4 w-full md:w-auto">
-                        <input 
-                          type="range" 
-                          min="150" 
-                          max="1000" 
-                          step="10"
-                          value={targetEdgeCallsLimit} 
-                          onChange={(e) => setTargetEdgeCallsLimit(Number(e.target.value))}
-                          className="w-full md:w-48 h-1.5 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                        />
-                        <div className="font-mono text-xs font-bold text-neutral-800 bg-neutral-100 px-3 py-1.5 rounded-lg border border-neutral-200 shrink-0">
-                          {targetEdgeCallsLimit} calls
-                        </div>
-                      </div>
-                    </div>
-                    
-                    {/* Insights Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                      
-                      <div className="bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs">
-                        <div className="flex items-center justify-between mb-3 text-neutral-400">
-                          <CloudLightning className="h-5 w-5 text-blue-600" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Edge Calls</span>
-                        </div>
-                        <span className="text-3xl font-black text-neutral-900 font-display block">
-                          {insights.apiCallsThisMonth}
-                        </span>
-                        <span className="text-[11px] font-sans text-neutral-500 mt-1 block">
-                          Edge telemetry events captured
-                        </span>
-                      </div>
-
-                       <div className="bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs">
-                        <div className="flex items-center justify-between mb-3 text-neutral-400">
-                          <Key className="h-5 w-5 text-indigo-600" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Keys Allocated</span>
-                        </div>
-                        <span className="text-3xl font-black text-neutral-900 font-display block">
-                          {apiKeys.filter(k => k.status === "Active").length} / {apiKeys.length}
-                        </span>
-                        <span className="text-[11px] font-sans text-neutral-500 mt-1 block">
-                          Active cryptographic handles
-                        </span>
-                      </div>
-
-                      <div className="bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs">
-                        <div className="flex items-center justify-between mb-3 text-neutral-400">
-                          <Server className="h-5 w-5 text-green-600" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Active Nodes</span>
-                        </div>
-                        <span className="text-3xl font-black text-neutral-900 font-display block">
-                          {insights.activeNodes}
-                        </span>
-                        <span className="text-[11px] font-sans text-neutral-500 mt-1 block">
-                          Regional distribution points
-                        </span>
-                      </div>
-
-                      <div className="bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs">
-                        <div className="flex items-center justify-between mb-3 text-neutral-400">
-                          <TrendingUp className="h-5 w-5 text-orange-600" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Channel Capacity</span>
-                        </div>
-                        <span className="text-3xl font-black text-neutral-900 font-display block">
-                          {Math.min(Math.round((insights.apiCallsThisMonth / targetEdgeCallsLimit) * 100), 100)}%
-                        </span>
-                        <span className="text-[11px] font-sans text-neutral-500 mt-1 block">
-                          Of custom budget limit ({targetEdgeCallsLimit})
-                        </span>
-                      </div>
-
-                    </div>
-
-                    {/* Quick Simulated Database interaction area */}
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      
-                      {/* Left: Interactive Telemetry Event Dispatcher */}
-                      <div className="lg:col-span-1 bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs">
-                        <h3 className="font-display font-bold text-neutral-900 text-lg mb-2">Simulate Telemetry Log</h3>
-                        <p className="text-xs text-neutral-500 leading-relaxed font-sans mb-4">
-                          Trigger custom system telemetry. Once submitted, actions successfully update the integrated Firestore collections securely.
-                        </p>
-
-                        <form onSubmit={handleAddNewLog} className="space-y-4">
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest block">Event Title</label>
-                            <input 
-                              type="text" 
-                              required
-                              value={newAction} 
-                              onChange={(e) => setNewAction(e.target.value)}
-                              placeholder="e.g., Cache Purge Completed"
-                              className="w-full px-3 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-600 outline-none text-xs transition-all"
-                            />
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest block">Details</label>
-                            <textarea 
-                              value={newDetails} 
-                              onChange={(e) => setNewDetails(e.target.value)}
-                              placeholder="Describe the operational actions... (Optional)"
-                              rows={2}
-                              className="w-full px-3 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-600 outline-none text-xs transition-all resize-none"
-                            />
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest block">System Origin Point</label>
-                            <select 
-                              value={newOrigin} 
-                              onChange={(e) => setNewOrigin(e.target.value)}
-                              className="w-full px-3 py-2 bg-neutral-50 border border-neutral-200 rounded-xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-600 outline-none text-xs transition-all cursor-pointer font-sans"
-                            >
-                              <option value="Local Client Connection">Local Client Connection</option>
-                              <option value="Active UI Session Frame">Active UI Session Frame</option>
-                              <option value="Edge Node Asia-Southeast">Edge Node Asia-Southeast</option>
-                              <option value="US-East Cloud Instance">US-East Cloud Instance</option>
-                              <option value="Europe-West Relay">Europe-West Relay</option>
-                            </select>
-                          </div>
-
-                          <button
-                            type="submit"
-                            className="w-full py-2.5 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center space-x-1 cursor-pointer"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                            <span>Dispatch Log Event</span>
-                          </button>
-                        </form>
-                      </div>
-
-                      {/* Right List: Real-time Telemetry Overview */}
-                      <div className="lg:col-span-2 bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs flex flex-col justify-between">
-                        <div>
-                          <div className="flex items-center justify-between mb-4">
-                            <h3 className="font-display font-bold text-neutral-900 text-lg">Active Session Streams</h3>
-                            <button
-                              onClick={() => setActiveTab("logs")}
-                              className="text-xs text-blue-600 font-bold hover:underline"
-                            >
-                              View exhaustive historical feed
-                            </button>
-                          </div>
-
-                          <div className="space-y-3.5">
-                            {logs.slice(0, 3).map((log) => (
-                              <div key={log.id} className="flex items-start justify-between p-3.5 bg-neutral-50 border border-neutral-150 rounded-xl">
-                                <div className="space-y-1 pr-4">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-mono text-[9px] px-1.5 py-0.5 bg-blue-50 border border-blue-100 rounded text-blue-700 font-bold">
-                                      {log.origin}
-                                    </span>
-                                    <span className="text-xs font-bold text-neutral-900">{log.action}</span>
-                                  </div>
-                                  <p className="text-xs text-neutral-500 font-sans leading-relaxed">{log.details}</p>
-                                </div>
-                                <span className="text-[10px] text-neutral-400 font-mono shrink-0 select-none">
-                                  {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="bg-neutral-100/50 p-4 rounded-xl border border-neutral-200 text-xs text-neutral-500 mt-4 leading-relaxed flex flex-col gap-1.5 font-sans">
-                          <div className="flex items-center gap-1.5 font-bold text-neutral-700 select-none">
-                            <Database className="h-4 w-4 text-blue-600" />
-                            <span>Technical Cloud Infrastructure Integration</span>
-                          </div>
-                          <span>
-                            This module is connected to live firestore instances. Operations you complete automatically trigger transactional ABAC writes protected by isolation rules on the database.
+                  {!isCustomUrlActive ? (
+                    <div className="grid grid-cols-3 gap-2">
+                      {BEAR_TEMPLATES.map((tpl) => (
+                        <div
+                          key={tpl.id}
+                          onClick={() => selectTemplate(tpl)}
+                          className={`group cursor-pointer rounded-xl overflow-hidden border-2 relative transition-all ${
+                            selectedTemplateId === tpl.id
+                              ? "border-bear-brown scale-95 shadow-md"
+                              : "border-transparent hover:border-bear-khaki/50"
+                          }`}
+                          title={`${tpl.title} (${tpl.category})`}
+                        >
+                          <img
+                            src={tpl.imageUrl}
+                            alt={tpl.title}
+                            className="h-14 w-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                          <div className="absolute inset-0 bg-black/20" />
+                          <span className="absolute bottom-1 left-1.5 text-[9px] text-white font-bold tracking-wider uppercase bg-black/40 px-1 rounded">
+                            {tpl.category}
                           </span>
                         </div>
-                      </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div>
+                      <input
+                        type="url"
+                        placeholder="Paste premium image link here (https://...)"
+                        value={customUrlInput}
+                        onChange={(e) => setCustomUrlInput(e.target.value)}
+                        className="w-full text-xs font-semibold px-3 py-2.5 bg-bear-sand/40 border border-bear-latte rounded-xl text-bear-dark focus:outline-none focus:ring-2 focus:ring-bear-brown/30"
+                      />
+                    </div>
+                  )}
+                </div>
 
+                {/* Entry Caption */}
+                <div>
+                  <label className="block text-xs font-bold text-bear-dark/70 uppercase mb-1 px-0.5">
+                    Describe your bear sighting / thought
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={caption}
+                    onChange={(e) => setCaption(e.target.value)}
+                    placeholder="Provide details of your bear observation, tell a hilarious bear joke, or write down a cozy private note..."
+                    className="w-full text-xs font-medium p-3.5 bg-bear-sand/40 border border-bear-latte rounded-2xl text-bear-dark focus:outline-none focus:ring-2 focus:ring-bear-brown/30 leading-relaxed resize-none"
+                  />
+                  <p className="text-[10px] text-bear-khaki text-right mt-1 font-bold">
+                    Supports text and markdown paragraphs
+                  </p>
+                </div>
+
+                {/* Privacy Visibility Options */}
+                <div>
+                  <span className="block text-xs font-bold text-bear-dark/70 uppercase mb-1.5 px-0.5 animate-pulse">
+                    Visibility Mode
+                  </span>
+                  <div className="grid grid-cols-2 gap-3.5">
+                    {/* Public option */}
+                    <div
+                      onClick={() => setIsPublic(true)}
+                      className={`p-3 rounded-2xl border-2 flex items-center space-x-3 cursor-pointer text-left transition-all ${
+                        isPublic === true
+                          ? "bg-amber-50/50 border-bear-brown text-bear-dark font-semibold"
+                          : "bg-white border-bear-latte/70 hover:border-bear-khaki text-neutral-500"
+                      }`}
+                    >
+                      <div className="p-2 bg-amber-100 rounded-xl text-bear-brown shrink-0">
+                        <Globe className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold">Public Post</p>
+                        <p className="text-[10px] opacity-80 truncate">Visible on home feed</p>
+                      </div>
                     </div>
 
+                    {/* Private option */}
+                    <div
+                      onClick={() => setIsPublic(false)}
+                      className={`p-3 rounded-2xl border-2 flex items-center space-x-3 cursor-pointer text-left transition-all ${
+                        isPublic === false
+                          ? "bg-amber-50/50 border-bear-brown text-bear-dark font-semibold"
+                          : "bg-white border-bear-latte/70 hover:border-bear-khaki text-neutral-500"
+                      }`}
+                    >
+                      <div className="p-2 bg-amber-100 rounded-xl text-bear-brown shrink-0">
+                        <Lock className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold">Private Note</p>
+                        <p className="text-[10px] opacity-80 truncate">Private to your den</p>
+                      </div>
+                    </div>
                   </div>
-                )}
+                </div>
 
-                {/* LOGS LIST TAB */}
-                {activeTab === "logs" && (
-                  <div className="space-y-6 bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-neutral-100">
-                      <div>
-                        <h3 className="font-display font-bold text-neutral-900 text-lg">
-                          Detailed Telemetry Feeds ({
-                            logs.filter(log => {
-                              const q = logsSearchText.trim().toLowerCase();
-                              const matchesSearch = !q || log.action.toLowerCase().includes(q) || log.details.toLowerCase().includes(q) || log.origin.toLowerCase().includes(q);
-                              const matchesOrigin = logsOriginFilter === "All" || log.origin === logsOriginFilter;
-                              return matchesSearch && matchesOrigin;
-                            }).length
-                          })
-                        </h3>
-                        <p className="text-xs text-neutral-500">Exhaustive historical security, validation, and pipeline trigger telemetry logging.</p>
-                      </div>
+                {/* Live Card Preview */}
+                <div className="rounded-2xl border border-bear-latte bg-bear-sand/20 p-4 relative">
+                  <span className="absolute top-2.5 right-3 text-[9px] font-mono font-bold tracking-widest text-bear-khaki uppercase select-none">
+                    Sandbox Preview
+                  </span>
+                  
+                  <div className="flex items-center space-x-2 mb-2">
+                    <img
+                      src={user?.photoURL || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${user?.uid}`}
+                      alt="Avatar"
+                      className="h-6 w-6 rounded-full bg-bear-latte border border-bear-khaki/40"
+                    />
+                    <div className="text-left">
+                      <p className="text-[11px] font-black leading-tight text-bear-dark">
+                        {user?.displayName || "Me"}
+                      </p>
+                      <p className="text-[9px] text-bear-khaki font-mono font-bold leading-none">
+                        {isPublic ? "🌐 Publicly shared" : "🔒 Private reserve"}
+                      </p>
+                    </div>
+                  </div>
 
-                      <button
-                        onClick={() => {
-                          if (confirm("Reset current display logs list to defaults?")) {
-                            loadDashboardData();
-                          }
-                        }}
-                        className="px-3.5 py-1.5 border border-neutral-200 bg-white text-xs font-semibold rounded-lg hover:bg-neutral-50 text-neutral-600 cursor-pointer flex items-center space-x-1.5 shadow-xs animate-none"
+                  <div className="rounded-xl overflow-hidden max-h-[140px] aspect-video border border-bear-latte/60 mb-2 bg-bear-sand/50">
+                    <img
+                      src={isCustomUrlActive ? (customUrlInput || "https://images.unsplash.com/photo-1530595467537-0b5996c41f2d") : imageUrl}
+                      alt="Compiling cover..."
+                      className="w-full h-full object-cover opacity-80"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1530595467537-0b5996c41f2d";
+                      }}
+                    />
+                  </div>
+
+                  <p className="text-[11px] text-bear-dark leading-relaxed font-sans line-clamp-2 text-left">
+                    {caption.trim() || "Type caption to populate preview..."}
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="w-full py-3.5 bg-bear-brown hover:bg-bear-dark text-white font-bold rounded-2xl shadow-md transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-2 cursor-pointer text-sm"
+                >
+                  {saving ? (
+                    <>
+                      <LoaderIcon />
+                      <span>Saving to Den...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4" />
+                      <span>{isPublic ? "Post Publicly" : "Lock in Notes"}</span>
+                    </>
+                  )}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {/* RIGHT: Manager Deck & Collections Filter (span 7/12) */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-white border border-bear-latte rounded-3xl p-6 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-bear-latte pb-4 gap-4">
+                <div>
+                  <h2 className="font-display font-black text-bear-dark text-lg text-left">Your Collections</h2>
+                  <p className="text-[11px] text-bear-khaki font-bold text-left mt-0.5">
+                    Click to filter and manage your catalog of sightings.
+                  </p>
+                </div>
+
+                <div className="flex p-1 bg-bear-sand rounded-xl shrink-0 select-none">
+                  <button
+                    onClick={() => setActiveTab("posts")}
+                    className={`px-4 py-2 text-xs font-extrabold rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer ${
+                      activeTab === "posts"
+                        ? "bg-white text-bear-dark shadow-xs"
+                        : "text-neutral-500 hover:text-bear-dark"
+                    }`}
+                  >
+                    <Globe className="h-3.5 w-3.5" />
+                    <span>My Posts ({postsList.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveTab("notes")}
+                    className={`px-4 py-2 text-xs font-extrabold rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer ${
+                      activeTab === "notes"
+                        ? "bg-white text-bear-dark shadow-xs"
+                        : "text-neutral-500 hover:text-bear-dark"
+                    }`}
+                  >
+                    <Lock className="h-3.5 w-3.5" />
+                    <span>My Notes ({notesList.length})</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Loader */}
+              {loading ? (
+                <div className="flex flex-col items-center justify-center py-20 text-bear-khaki">
+                  <RefreshCw className="h-8 w-8 animate-spin" />
+                  <p className="text-xs font-bold mt-2 font-mono">Securing Den Feed...</p>
+                </div>
+              ) : (
+                <div className="space-y-4 pt-4">
+                  {/* Empty State */}
+                  {((activeTab === "posts" && postsList.length === 0) || 
+                    (activeTab === "notes" && notesList.length === 0)) && (
+                    <div className="text-center py-16 px-4 border border-dashed border-bear-khaki/30 rounded-2xl bg-bear-sand/20 select-none">
+                      <div className="mx-auto h-12 w-12 text-bear-khaki mb-3">🐾</div>
+                      <h4 className="font-display font-bold text-bear-dark text-sm">Quiet in the woods</h4>
+                      <p className="text-xs text-neutral-450 text-neutral-400 max-w-xs mx-auto mt-1 leading-relaxed">
+                        You have not composed any {activeTab === "posts" ? "public posts" : "private notes"} yet. Use the composer on the left to start!
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Render Current List */}
+                  <div className="space-y-4">
+                    {(activeTab === "posts" ? postsList : notesList).map((entry) => (
+                      <div 
+                        key={entry.id} 
+                        className="bg-bear-light/35 border border-bear-latte/60 rounded-2xl p-4 text-left flex flex-col md:flex-row gap-4 relative group"
                       >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                        <span>Reset Default Logs</span>
-                      </button>
-                    </div>
+                        {/* Entry Preview Image */}
+                        <div className="w-full md:w-32 h-24 rounded-xl overflow-hidden shrink-0 border border-bear-latte/60">
+                          <img
+                            src={entry.imageUrl}
+                            alt="Cover"
+                            className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1530595467537-0b5996c41f2d";
+                            }}
+                          />
+                        </div>
 
-                    {/* Interactive Filter Area */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-neutral-50 p-4 rounded-2xl border border-neutral-150">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest block font-sans">Query Filter Text</label>
-                        <input 
-                          type="text"
-                          value={logsSearchText}
-                          onChange={(e) => setLogsSearchText(e.target.value)}
-                          placeholder="Search action keyword, context..."
-                          className="w-full px-3 py-2 bg-white border border-neutral-200 rounded-xl text-xs focus:ring-4 focus:ring-blue-500/10 focus:border-blue-600 outline-none transition-all"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest block font-sans">Filter by System Node Origin</label>
-                        <select
-                          value={logsOriginFilter}
-                          onChange={(e) => setLogsOriginFilter(e.target.value)}
-                          className="w-full px-3 py-2 bg-white border border-neutral-200 rounded-xl text-xs focus:ring-4 focus:ring-blue-500/10 focus:border-blue-600 outline-none cursor-pointer"
-                        >
-                          <option value="All">All Origins</option>
-                          <option value="Local Client Connection">Local Client Connection</option>
-                          <option value="Active UI Session Frame">Active UI Session Frame</option>
-                          <option value="Edge Node Asia-Southeast">Edge Node Asia-Southeast</option>
-                          <option value="US-East Cloud Instance">US-East Cloud Instance</option>
-                          <option value="Europe-West Relay">Europe-West Relay</option>
-                          <option value="Security System Portal">Security System Portal</option>
-                          <option value="Global System Settings">Global System Settings</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="divide-y divide-neutral-150">
-                      {logs.filter(log => {
-                        const q = logsSearchText.trim().toLowerCase();
-                        const matchesSearch = !q || log.action.toLowerCase().includes(q) || log.details.toLowerCase().includes(q) || log.origin.toLowerCase().includes(q);
-                        const matchesOrigin = logsOriginFilter === "All" || log.origin === logsOriginFilter;
-                        return matchesSearch && matchesOrigin;
-                      }).length > 0 ? (
-
-                        logs.filter(log => {
-                          const q = logsSearchText.trim().toLowerCase();
-                          const matchesSearch = !q || log.action.toLowerCase().includes(q) || log.details.toLowerCase().includes(q) || log.origin.toLowerCase().includes(q);
-                          const matchesOrigin = logsOriginFilter === "All" || log.origin === logsOriginFilter;
-                          return matchesSearch && matchesOrigin;
-                        }).map((log) => (
-                          <div key={log.id} className="py-4.5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                            <div className="space-y-1.5 flex-1 pr-6">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-mono text-[9px] px-2 py-0.5 bg-neutral-100 border border-neutral-200 rounded font-semibold text-neutral-600">
-                                  ID: {log.id}
-                                </span>
-                                <span className="font-mono text-[9px] px-2 py-0.5 bg-blue-50 border border-blue-100 rounded text-blue-700 font-bold">
-                                  {log.origin}
-                                </span>
-                                <span className="text-xs font-bold text-neutral-950">{log.action}</span>
-                              </div>
-                              <p className="text-xs text-neutral-600 leading-relaxed font-sans">{log.details}</p>
-                              <span className="block text-[10px] text-neutral-400 font-mono">
-                                Registered: {new Date(log.timestamp).toLocaleString()}
+                        {/* Mid Row content */}
+                        <div className="flex-1 min-w-0 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center space-x-2 text-[10px] text-bear-khaki font-mono font-bold mb-1">
+                              <span>Id: {entry.id.substring(0, 6)}...</span>
+                              <span>•</span>
+                              <span>
+                                {new Date(entry.createdAt).toLocaleDateString([], {
+                                  month: "short",
+                                  day: "numeric",
+                                  year: "numeric"
+                                })}
                               </span>
                             </div>
 
-                            <button
-                              onClick={() => handleDeleteLog(log.id)}
-                              className="p-2 border border-neutral-200 rounded-lg text-neutral-400 hover:text-red-600 hover:bg-red-50 hover:border-red-100 transition-colors cursor-pointer sm:shrink-0"
-                              title="Delete log record locally"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="py-12 text-center text-neutral-400 flex flex-col items-center justify-center space-y-2 select-none">
-                          <div className="p-3 bg-neutral-50 rounded-full border border-neutral-150">
-                            <Database className="h-6 w-6 text-neutral-300" />
-                          </div>
-                          <p className="font-bold text-neutral-800 text-sm">No activity telemetry found</p>
-                          <p className="text-xs text-neutral-500 max-w-xs leading-relaxed">
-                            Use the System Insights tab to dispatch a custom operational event!
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* SECRET KEYS TAB */}
-                {activeTab === "keys" && (
-                  <div className="bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs space-y-6">
-                    <div>
-                      <h3 className="font-display font-bold text-neutral-900 text-lg">StratoSync API Access Handles</h3>
-                      <p className="text-xs text-neutral-500">Provide direct communication to regional edge nodes from remote command lines securely.</p>
-                    </div>
-
-                    <div className="border border-indigo-100 bg-indigo-50/35 p-4 rounded-xl flex items-start space-x-3 text-xs text-indigo-700 leading-relaxed">
-                      <Key className="h-5 w-5 text-indigo-600 shrink-0 mt-0.5" />
-                      <div>
-                        <span className="font-bold block">Developer Access Credential Information</span>
-                        <p className="mt-0.5">
-                          Keys should remain securely guarded. Avoid committing raw API credentials directly into Git repositories. Store production variables as secrets natively within your Cloud project console space.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="border border-neutral-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                        <div className="space-y-1">
-                          <span className="text-xs font-bold text-neutral-800 block">Console Command Access key</span>
-                          <code className="text-[11px] bg-neutral-50 border border-neutral-150 rounded px-2.5 py-1 text-neutral-600 font-mono inline-block">
-                            stratosync_live_dev_{user?.uid.slice(0, 10)}...••••••••
-                          </code>
-                        </div>
-                        <span className="bg-green-50 text-green-700 rounded-full font-bold text-[10px] px-2.5 py-0.5 border border-green-100 uppercase tracking-widest block select-none">
-                          Active State
-                        </span>
-                      </div>
-
-                      <div className="border border-neutral-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                        <div className="space-y-1">
-                          <span className="text-xs font-bold text-neutral-800 block">Edge Webhook Client Access Handle</span>
-                          <code className="text-[11px] bg-neutral-50 border border-neutral-150 rounded px-2.5 py-1 text-neutral-600 font-mono inline-block">
-                            stratosync_webhook_sign_{user?.uid.slice(0, 8)}...••••••••
-                          </code>
-                        </div>
-                        <span className="bg-green-50 text-green-700 rounded-full font-bold text-[10px] px-2.5 py-0.5 border border-green-100 uppercase tracking-widest block select-none">
-                          Active State
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* GLOBAL SETTINGS TAB */}
-                {activeTab === "settings" && (
-                  <div className="bg-white border border-neutral-200 p-6 rounded-2xl shadow-xs space-y-6">
-                    <div>
-                      <h3 className="font-display font-bold text-neutral-900 text-lg">Console Space Configuration Parameters</h3>
-                      <p className="text-xs text-neutral-500 text-neutral-400">Configure global parameters and verify security compliance checks.</p>
-                    </div>
-
-                    <div className="border border-neutral-200 rounded-xl divide-y divide-neutral-150 font-sans">
-                      
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="text-sm font-bold text-neutral-800 block">Strict Secure Handshakes</span>
-                          <p className="text-xs text-neutral-400 mt-0.5">Enforce mandatory JWT token handshakes for all browser-to-server operations.</p>
-                        </div>
-                        <div className="relative inline-flex items-center cursor-pointer">
-                          <div className="w-11 h-6 bg-blue-600 rounded-full transition-colors">
-                            <div className="absolute top-[2px] right-[2px] bg-white w-5 h-5 rounded-full transition-all"></div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="text-sm font-bold text-neutral-800 block">Telemetry Aggregation Pipeline</span>
-                          <p className="text-xs text-neutral-400 mt-0.5">Allow automatic collection of cloud performance telemetry logs regionally.</p>
-                        </div>
-                        <div className="relative inline-flex items-center cursor-pointer">
-                          <div className="w-11 h-6 bg-blue-600 rounded-full transition-colors">
-                            <div className="absolute top-[2px] right-[2px] bg-white w-5 h-5 rounded-full transition-all5"></div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <span className="text-sm font-bold text-red-600 block">Erase Current Console Telemetry</span>
-                          <p className="text-xs text-neutral-400 mt-0.5">Irreversibly wipe simulated logs and reset system insights to start state.</p>
-                        </div>
-                        <button
-                          onClick={() => {
-                            if (confirm("Are you sure you want to completely erase current active display logs?")) {
-                              setLogs([]);
-                              if (insights) setInsights({ ...insights, apiCallsThisMonth: 0 });
-                            }
-                          }}
-                          className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold rounded-lg border border-red-100 transition-colors cursor-pointer"
-                        >
-                          Wipe Telemetry
-                        </button>
-                      </div>
-
-                    </div>
-                  </div>
-                )}
-
-                {/* PERSONAL NOTES TAB */}
-                {activeTab === "notes" && (
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fade-in">
-                    {/* Left List Pane (span 4/12) */}
-                    <div className="lg:col-span-4 bg-white border border-neutral-200 rounded-2xl p-5 space-y-4 shadow-sm">
-                      <div className="flex items-center justify-between gap-4">
-                        <h3 className="font-display font-extrabold text-neutral-900 text-sm">Notes Index</h3>
-                        <button
-                          onClick={handleCreateNote}
-                          disabled={noteSaving}
-                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-50"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                          <span>New Note</span>
-                        </button>
-                      </div>
-
-                      {/* Search Index Input */}
-                      <div className="relative">
-                        <input
-                          type="text"
-                          placeholder="Search personal notes..."
-                          value={notesSearch}
-                          onChange={(e) => setNotesSearch(e.target.value)}
-                          className="w-full text-xs font-semibold px-3.5 py-2.5 border border-neutral-200 rounded-xl bg-neutral-55/40 hover:bg-neutral-50 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition-all font-sans"
-                        />
-                      </div>
-
-                      {/* Scrollable list of items */}
-                      <div className="space-y-2.5 max-h-[460px] overflow-y-auto pr-1">
-                        {notes.filter(n =>
-                          (n.title || "").toLowerCase().includes(notesSearch.toLowerCase()) ||
-                          (n.content || "").toLowerCase().includes(notesSearch.toLowerCase())
-                        ).length === 0 ? (
-                          <div className="text-center py-12 px-4 border border-dashed border-neutral-200 rounded-xl bg-neutral-50/50">
-                            <span className="text-neutral-400 font-mono text-[10px] uppercase font-bold tracking-wider">No matching notes found</span>
-                          </div>
-                        ) : (
-                          notes.filter(n =>
-                            (n.title || "").toLowerCase().includes(notesSearch.toLowerCase()) ||
-                            (n.content || "").toLowerCase().includes(notesSearch.toLowerCase())
-                          ).map((note) => {
-                            const isCurrent = selectedNote?.id === note.id;
-                            const snippet = note.content.length > 55 ? note.content.substring(0, 55) + "..." : note.content || "Empty description.";
-                            return (
-                              <div
-                                key={note.id}
-                                onClick={() => {
-                                  setSelectedNote(note);
-                                  setNoteTitle(note.title);
-                                  setNoteContent(note.content);
-                                }}
-                                className={`group p-3.5 rounded-xl border transition-all cursor-pointer relative text-left ${
-                                  isCurrent
-                                    ? "bg-blue-50/60 border-blue-200 text-blue-950 font-medium shadow-2xs"
-                                    : "bg-white border-neutral-200 hover:border-neutral-300 text-neutral-800 hover:bg-neutral-50"
-                                }`}
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <h4 className="font-sans text-xs font-bold truncate group-hover:text-blue-600 transition-colors">
-                                      {note.title || "Untitled Note"}
-                                    </h4>
-                                    <p className="text-[11px] text-neutral-400 mt-1 line-clamp-2 leading-relaxed">
-                                      {snippet}
-                                    </p>
-                                    <span className="text-[9px] font-mono text-neutral-400 font-bold block mt-2.5">
-                                      {new Date(note.updatedAt).toLocaleDateString()} at {new Date(note.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </span>
-                                  </div>
-
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleDeleteNote(note.id);
-                                    }}
-                                    disabled={noteDeleting === note.id}
-                                    className="p-1 rounded-md text-neutral-400 hover:text-red-600 hover:bg-neutral-100/60 transition-colors cursor-pointer shrink-0"
-                                    title="Delete Note"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Right Editor Screen (span 8/12) */}
-                    <div className="lg:col-span-8 bg-white border border-neutral-200 rounded-2xl p-6 shadow-sm min-h-[480px] flex flex-col justify-between">
-                      {selectedNote ? (
-                        <div className="h-full flex flex-col justify-between space-y-5">
-                          {/* Rich Head Row */}
-                          <div className="space-y-4">
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-150 pb-4">
-                              <div className="min-w-0 flex-1 text-left">
-                                <span className="text-[10px] font-mono text-neutral-400 uppercase font-bold tracking-wider">Note Editor Active</span>
-                                <input
-                                  type="text"
-                                  value={noteTitle}
-                                  onChange={(e) => setNoteTitle(e.target.value)}
-                                  placeholder="Untitled Note"
-                                  className="w-full text-base font-extrabold text-neutral-900 border-none bg-transparent focus:outline-hidden focus:ring-0 p-0 mt-1 placeholder-neutral-300"
-                                />
-                              </div>
-
-                              <div className="flex items-center gap-2 shrink-0">
-                                <button
-                                  onClick={() => {
-                                    setNoteTitle(selectedNote.title);
-                                    setNoteContent(selectedNote.content);
-                                  }}
-                                  disabled={noteSaving}
-                                  className="px-3 py-1.5 border border-neutral-200 text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 text-xs font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                                >
-                                  Revert Edits
-                                </button>
-                                <button
-                                  onClick={handleSaveNote}
-                                  disabled={noteSaving}
-                                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-50"
-                                >
-                                  {noteSaving ? (
-                                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                                  ) : (
-                                    <Save className="h-3.5 w-3.5" />
-                                  )}
-                                  <span>Save Note</span>
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Dynamic text area editor */}
-                            <div className="mt-4">
-                              <textarea
-                                value={noteContent}
-                                onChange={(e) => setNoteContent(e.target.value)}
-                                placeholder="Type your core developer adjustments, API payloads, credentials logs, or configuration specifications..."
-                                className="w-full h-80 text-xs font-semibold font-mono p-4 border border-neutral-200 rounded-xl bg-neutral-50/20 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition-all resize-none leading-relaxed text-neutral-800 placeholder-neutral-400"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="pt-4 border-t border-neutral-150 flex items-center justify-between text-[10px] text-neutral-400 font-mono font-bold">
-                            <span>Secured Identity Path: /personal_notes/{selectedNote.id}</span>
-                            <span>Char Count: {noteContent.length} / 50,000</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4 my-auto">
-                          <div className="p-4 bg-blue-50 rounded-2xl">
-                            <BookOpen className="h-8 w-8 text-blue-600 animate-pulse" />
-                          </div>
-                          <div>
-                            <h4 className="font-display font-extrabold text-neutral-900 text-base">No Personal Note Active</h4>
-                            <p className="text-xs text-neutral-400 mt-1 max-w-sm leading-relaxed">
-                              Choose an entry from the notes index sidebar or draft a brand-new developer notebook item to start recording security logs and workspace adjustments.
+                            <p className="text-xs font-semibold text-bear-dark leading-relaxed line-clamp-3">
+                              {entry.caption}
                             </p>
-                            <button
-                              onClick={handleCreateNote}
-                              className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-all cursor-pointer shadow-sm"
-                            >
-                              Draft a Note
-                            </button>
                           </div>
+
+                          {/* Reaction summary if public */}
+                          {entry.isPublic && (
+                            <div className="flex flex-wrap gap-1.5 mt-2.5">
+                              {(Object.entries(entry.reactions || {}) as [string, string[]][]).map(([emoji, uids]) => {
+                                if (uids.length === 0) return null;
+                                return (
+                                  <span 
+                                    key={emoji} 
+                                    className="bg-white px-2 py-0.5 rounded-lg border border-bear-latte text-[10px] font-mono text-bear-dark font-extrabold flex items-center gap-1.5"
+                                  >
+                                    <span>{emoji}</span>
+                                    <span>{uids.length}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
-                      )}
+
+                        {/* Right side Actions block */}
+                        <div className="flex flex-row md:flex-col justify-end md:justify-start items-center gap-2 border-t md:border-t-0 border-bear-latte pt-3 md:pt-0 shrink-0">
+                          <button
+                            onClick={() => startEdit(entry)}
+                            className="flex-1 md:flex-initial p-2 rounded-xl text-bear-brown hover:text-white hover:bg-bear-brown border border-bear-latte hover:border-transparent transition-all cursor-pointer flex items-center justify-center space-x-1"
+                            title="Edit entry"
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                            <span className="text-[10px] font-bold md:hidden">Edit</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteEntry(entry.id)}
+                            disabled={deletingId === entry.id}
+                            className="flex-1 md:flex-initial p-2 rounded-xl text-red-600 hover:text-white hover:bg-red-600 border border-bear-latte hover:border-transparent transition-all cursor-pointer flex items-center justify-center space-x-1 disabled:opacity-50"
+                            title="Delete entry"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span className="text-[10px] font-bold md:hidden">Delete</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* MODAL: Inline edit sheet */}
+      <AnimatePresence>
+        {editingEntry && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white border border-bear-latte rounded-3xl w-full max-w-xl p-6 sm:p-8 relative shadow-2xl"
+            >
+              <button
+                onClick={() => setEditingEntry(null)}
+                className="absolute top-5 right-5 p-1 rounded-full hover:bg-bear-sand text-bear-khaki hover:text-bear-dark transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+
+              <h2 className="font-display font-black text-bear-dark text-lg mb-1 flex items-center space-x-2 text-left">
+                <span>📝</span>
+                <span>Edit Bear Entry</span>
+              </h2>
+              <p className="text-xs text-bear-khaki text-left font-bold mb-5 font-mono">
+                Updating item identity {editingEntry.id.substring(0, 8)}...
+              </p>
+
+              <form onSubmit={handleSaveEdits} className="space-y-4">
+                {/* Image URL */}
+                <div className="text-left">
+                  <label className="block text-xs font-bold text-bear-dark/70 uppercase mb-1">
+                    Bear Cover URL
+                  </label>
+                  <input
+                    type="url"
+                    value={editImageUrl}
+                    onChange={(e) => setEditImageUrl(e.target.value)}
+                    required
+                    className="w-full text-xs font-semibold px-3 py-2.5 bg-bear-sand/40 border border-bear-latte rounded-xl text-bear-dark focus:outline-none focus:ring-2 focus:ring-bear-brown/30"
+                  />
+                </div>
+
+                {/* Caption */}
+                <div className="text-left">
+                  <label className="block text-xs font-bold text-bear-dark/70 uppercase mb-1">
+                    Caption
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={editCaption}
+                    onChange={(e) => setEditCaption(e.target.value)}
+                    required
+                    className="w-full text-xs font-medium p-3.5 bg-bear-sand/40 border border-bear-latte rounded-2xl text-bear-dark focus:outline-none focus:ring-2 focus:ring-bear-brown/30 leading-relaxed resize-none"
+                  />
+                </div>
+
+                {/* Visibility */}
+                <div className="text-left">
+                  <label className="block text-xs font-bold text-bear-dark/70 uppercase mb-1.5">
+                    Visibility Setup
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div
+                      onClick={() => setEditIsPublic(true)}
+                      className={`p-3 rounded-2xl border-2 flex items-center space-x-3 cursor-pointer text-left transition-all ${
+                        editIsPublic === true
+                          ? "bg-amber-50/50 border-bear-brown text-bear-dark font-semibold"
+                          : "bg-white border-bear-latte/70 hover:border-bear-khaki text-neutral-500"
+                      }`}
+                    >
+                      <Globe className="h-4 w-4 text-bear-brown shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold">Public Post</p>
+                        <p className="text-[10px] opacity-75">Publish on the main feed</p>
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={() => setEditIsPublic(false)}
+                      className={`p-3 rounded-2xl border-2 flex items-center space-x-3 cursor-pointer text-left transition-all ${
+                        editIsPublic === false
+                          ? "bg-amber-50/50 border-bear-brown text-bear-dark font-semibold"
+                          : "bg-white border-bear-latte/70 hover:border-bear-khaki text-neutral-500"
+                      }`}
+                    >
+                      <Lock className="h-4 w-4 text-bear-brown shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold">Private Note</p>
+                        <p className="text-[10px] opacity-75">Visible strictly in Notes</p>
+                      </div>
                     </div>
                   </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+                </div>
 
-        {/* Footer info displaying database setup comments */}
-        <footer className="h-12 bg-white border-t border-neutral-200/60 px-6 sm:px-8 flex items-center justify-between text-[10px] text-neutral-400 font-bold uppercase tracking-wider select-none shrink-0">
-          <div className="flex gap-4">
-            <span>Integration Adaptor Ready: Firebase & Supabase Configurable</span>
-            <span className="hidden sm:inline">|</span>
-            <span className="hidden sm:inline">Telemetry Frequency: Balanced</span>
+                {/* Actions */}
+                <div className="flex gap-3.5 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setEditingEntry(null)}
+                    className="flex-1 py-3 text-xs font-bold text-bear-dark border border-bear-latte hover:bg-bear-sand rounded-xl transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="flex-1 py-3 bg-bear-brown hover:bg-bear-dark text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center space-x-1.5 cursor-pointer text-xs"
+                  >
+                    {saving ? (
+                      <>
+                        <RefreshCw className="h-3 w-3 animate-spin" />
+                        <span>Synchronizing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-3.5 w-3.5" />
+                        <span>Save Changes</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
           </div>
-          <span>Aegis Portal console</span>
-        </footer>
-      </main>
+        )}
+      </AnimatePresence>
     </div>
+  );
+}
+
+// Simple spinners
+function LoaderIcon() {
+  return (
+    <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+    </svg>
   );
 }

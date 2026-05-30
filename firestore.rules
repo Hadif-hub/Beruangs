@@ -6,7 +6,7 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // 2. HARDENED GLOBAL HELPERS (Zero-Trust & Attribute-Based Access Control)
+    // 2. HARDENED GLOBAL HELPERS
     
     // Checks if the client holds an authenticated session token
     function isSignedIn() {
@@ -18,7 +18,7 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Validates that dynamic document IDs or references conform to safe length and character rules
+    // Validates that dynamic document IDs conform to safe rules
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -33,88 +33,41 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // 3. TELEMETRY LOG SCHEMA VALIDATOR (Anti-Update-Gap, Size Bounded)
-    function isValidActivityLog(data) {
-      return data.keys().hasAll(['userId', 'action', 'timestamp', 'details', 'origin'])
-        && data.keys().size() == 5
-        && isOwner(data.userId) // Strictly forces identity isolation matching auth.uid
-        && data.action is string && data.action.size() >= 1 && data.action.size() <= 200
-        && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64
-        && data.details is string && data.details.size() >= 0 && data.details.size() <= 2000
-        && data.origin is string && data.origin.size() >= 1 && data.origin.size() <= 200;
-    }
-
-    // 4. API KEY SCHEMA VALIDATOR
-    function isValidApiKey(data) {
-      return data.keys().hasAll(['userId', 'name', 'keyToken', 'status', 'createdAt'])
-        && data.keys().size() == 5
-        && isOwner(data.userId) // Strictly forces identity isolation matching auth.uid
-        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
-        && data.keyToken is string && data.keyToken.size() >= 1 && data.keyToken.size() <= 200
-        && data.status is string && (data.status == 'Active' || data.status == 'Revoked')
-        && data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64;
-    }
-
-    // 5. GLOBAL USER SETTINGS SCHEMA VALIDATOR
-    function isValidUserSetting(data) {
-      return data.keys().hasAll(['strictSecureHandshakes', 'telemetryPipeline', 'originNode', 'maxRateLimit', 'alertEmail'])
-        && data.keys().size() == 5
-        && data.strictSecureHandshakes is bool
-        && data.telemetryPipeline is bool
-        && data.originNode is string && data.originNode.size() >= 0 && data.originNode.size() <= 200
-        && data.maxRateLimit is int
-        && data.alertEmail is string && data.alertEmail.size() >= 1 && data.alertEmail.size() <= 200;
-    }
-
-    // 5.1. PERSONAL NOTE SCHEMA VALIDATOR
-    function isValidPersonalNote(data) {
-      return data.keys().hasAll(['userId', 'title', 'content', 'createdAt', 'updatedAt'])
-        && data.keys().size() == 5
-        && isOwner(data.userId) // Strictly forces identity isolation matching auth.uid
-        && data.title is string && data.title.size() >= 0 && data.title.size() <= 200
-        && data.content is string && data.content.size() <= 50000
+    // 3. BEAR POST SCHEMA VALIDATOR
+    function isValidBearPost(data) {
+      return data.keys().hasAll(['userId', 'userDisplayName', 'userPhotoURL', 'caption', 'imageUrl', 'isPublic', 'reactions', 'createdAt', 'updatedAt'])
+        && data.keys().size() == 9
+        && isOwner(data.userId)
+        && data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 150
+        && data.userPhotoURL is string && data.userPhotoURL.size() <= 2000
+        && data.caption is string && data.caption.size() <= 10000
+        && data.imageUrl is string && data.imageUrl.size() <= 2000
+        && data.isPublic is bool
+        && data.reactions is map
         && data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64
         && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 
-    // 6. COLLECTION PORTAL RULES: activity_logs
-    match /activity_logs/{logId} {
-      // A user can ONLY read (get or query lists of) their own telemetry log records.
-      allow get: if isOwner(existing().userId);
-      allow list: if isOwner(existing().userId);
+    // 4. BEAR POSTS CONSOLE RULES
+    match /bear_posts/{postId} {
+      // Allow single document get and queries (list) if public OR belonging to the owner
+      allow get: if existing().isPublic == true || isOwner(existing().userId);
+      allow list: if resource.data.isPublic == true || isOwner(resource.data.userId);
 
-      // A user can ONLY create log docs with their own UID, adhering to strict schema patterns.
-      allow create: if isValidId(logId) && isValidActivityLog(incoming());
+      // Create: Authenticated users can write a post/note adhering to schema and linked to their owner UID
+      allow create: if isValidId(postId) && isValidBearPost(incoming());
 
-      // Telemetry logs are captured as immutable audit trails. Direct updates are strictly blocked.
-      allow update: if false;
+      // Update:
+      // Case A: Complete details update - Only author can change caption, title, visibility, etc.
+      // Case B: Emoji react updates - Any signed-in user can toggle reactions, altering only 'reactions' and 'updatedAt' fields.
+      allow update: if (
+        isSignedIn() && (
+          (isOwner(existing().userId) && isValidBearPost(incoming()) && incoming().userId == existing().userId && incoming().createdAt == existing().createdAt) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']) && incoming().userId == existing().userId && incoming().caption == existing().caption && incoming().imageUrl == existing().imageUrl && incoming().isPublic == existing().isPublic)
+        )
+      );
 
-      // A user can ONLY delete their own telemetry logs.
-      allow delete: if isOwner(existing().userId);
-    }
-
-    // 7. SECURITY KEYS RULES: Each user can only read, write, update, or delete their own dynamic keys.
-    match /api_keys/{keyId} {
-      allow get: if isOwner(existing().userId);
-      allow list: if isOwner(existing().userId);
-      allow create: if isValidId(keyId) && isValidApiKey(incoming());
-      allow update: if isOwner(existing().userId) && isValidApiKey(incoming()) && incoming().userId == existing().userId;
-      allow delete: if isOwner(existing().userId);
-    }
-
-    // 8. GLOBAL USER CONFIGURATION RULES: Settings are namespace-isolated by the path UID (userId).
-    // Each user can ONLY read or write to their own settings document.
-    match /user_settings/{userId} {
-      allow get: if isOwner(userId);
-      allow write: if isOwner(userId) && isValidUserSetting(incoming());
-    }
-
-    // 9. PERSONAL NOTES RULES: Each user can only read, write, update, or delete their own dynamic notes.
-    match /personal_notes/{noteId} {
-      allow get: if isOwner(existing().userId);
-      allow list: if isOwner(existing().userId);
-      allow create: if isValidId(noteId) && isValidPersonalNote(incoming());
-      allow update: if isOwner(existing().userId) && isValidPersonalNote(incoming()) && incoming().userId == existing().userId;
+      // Delete: Only the owner can remove a post
       allow delete: if isOwner(existing().userId);
     }
   }
