@@ -1,0 +1,127 @@
+{
+  "entities": {
+    "activityLog": {
+      "title": "Activity Log",
+      "description": "A secure telemetry log record owned by an authenticated user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the owner compiled from firebase authentications."
+        },
+        "action": {
+          "type": "string",
+          "description": "A succinct title describing the security or operational handshake event."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp indicating when the telemetry event was captured."
+        },
+        "details": {
+          "type": "string",
+          "description": "Verbose insights or context associated with the event."
+        },
+        "origin": {
+          "type": "string",
+          "description": "The specific client or edge server where this log originated."
+        }
+      },
+      "required": ["userId", "action", "timestamp", "details", "origin"]
+    },
+    "apiKey": {
+      "title": "API Keys",
+      "description": "Fully interactive secure external cryptographic keys belonging to authenticated users.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "keyToken": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["userId", "name", "keyToken", "status", "createdAt"]
+    },
+    "userSetting": {
+      "title": "User Global Configuration",
+      "description": "Console global parameters customizable per member.",
+      "type": "object",
+      "properties": {
+        "strictSecureHandshakes": {
+          "type": "boolean"
+        },
+        "telemetryPipeline": {
+          "type": "boolean"
+        },
+        "originNode": {
+          "type": "string"
+        },
+        "maxRateLimit": {
+          "type": "integer"
+        },
+        "alertEmail": {
+          "type": "string"
+        }
+      },
+      "required": ["strictSecureHandshakes", "telemetryPipeline", "originNode", "maxRateLimit", "alertEmail"]
+    },
+    "personalNote": {
+      "title": "Personal Note",
+      "description": "A private, customizable text note strictly owned and managed by the logged-in user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the owner linked to Google Authentication."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the note."
+        },
+        "content": {
+          "type": "string",
+          "description": "The rich or plain-text body content of the note."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the note was first drafted."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the note was last altered."
+        }
+      },
+      "required": ["userId", "title", "content", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "activity_logs/{logId}": {
+      "schema": "activityLog",
+      "description": "Collection of telemetry operational activity logs tracked per authenticated developer user."
+    },
+    "api_keys/{keyId}": {
+      "schema": "apiKey",
+      "description": "Secure API Keys configured by the user."
+    },
+    "user_settings/{userId}": {
+      "schema": "userSetting",
+      "description": "Interactive settings document uniquely stored using the users' UID."
+    },
+    "personal_notes/{noteId}": {
+      "schema": "personalNote",
+      "description": "Strictly restricted notes collection where authenticated users edit and retrieve private workspace notes."
+    }
+  }
+}

@@ -1,0 +1,121 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. DEFAULT-DENY SAFETY NET: Prevent any unintentional open exposure across the database
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. HARDENED GLOBAL HELPERS (Zero-Trust & Attribute-Based Access Control)
+    
+    // Checks if the client holds an authenticated session token
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Checks if the authenticated UID matches the record owner UID
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Validates that dynamic document IDs or references conform to safe length and character rules
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Helper shorthand for the incoming resource state payload for writes
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Helper shorthand for existing database state
+    function existing() {
+      return resource.data;
+    }
+
+    // 3. TELEMETRY LOG SCHEMA VALIDATOR (Anti-Update-Gap, Size Bounded)
+    function isValidActivityLog(data) {
+      return data.keys().hasAll(['userId', 'action', 'timestamp', 'details', 'origin'])
+        && data.keys().size() == 5
+        && isOwner(data.userId) // Strictly forces identity isolation matching auth.uid
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 200
+        && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64
+        && data.details is string && data.details.size() >= 0 && data.details.size() <= 2000
+        && data.origin is string && data.origin.size() >= 1 && data.origin.size() <= 200;
+    }
+
+    // 4. API KEY SCHEMA VALIDATOR
+    function isValidApiKey(data) {
+      return data.keys().hasAll(['userId', 'name', 'keyToken', 'status', 'createdAt'])
+        && data.keys().size() == 5
+        && isOwner(data.userId) // Strictly forces identity isolation matching auth.uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.keyToken is string && data.keyToken.size() >= 1 && data.keyToken.size() <= 200
+        && data.status is string && (data.status == 'Active' || data.status == 'Revoked')
+        && data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64;
+    }
+
+    // 5. GLOBAL USER SETTINGS SCHEMA VALIDATOR
+    function isValidUserSetting(data) {
+      return data.keys().hasAll(['strictSecureHandshakes', 'telemetryPipeline', 'originNode', 'maxRateLimit', 'alertEmail'])
+        && data.keys().size() == 5
+        && data.strictSecureHandshakes is bool
+        && data.telemetryPipeline is bool
+        && data.originNode is string && data.originNode.size() >= 0 && data.originNode.size() <= 200
+        && data.maxRateLimit is int
+        && data.alertEmail is string && data.alertEmail.size() >= 1 && data.alertEmail.size() <= 200;
+    }
+
+    // 5.1. PERSONAL NOTE SCHEMA VALIDATOR
+    function isValidPersonalNote(data) {
+      return data.keys().hasAll(['userId', 'title', 'content', 'createdAt', 'updatedAt'])
+        && data.keys().size() == 5
+        && isOwner(data.userId) // Strictly forces identity isolation matching auth.uid
+        && data.title is string && data.title.size() >= 0 && data.title.size() <= 200
+        && data.content is string && data.content.size() <= 50000
+        && data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    // 6. COLLECTION PORTAL RULES: activity_logs
+    match /activity_logs/{logId} {
+      // A user can ONLY read (get or query lists of) their own telemetry log records.
+      allow get: if isOwner(existing().userId);
+      allow list: if isOwner(existing().userId);
+
+      // A user can ONLY create log docs with their own UID, adhering to strict schema patterns.
+      allow create: if isValidId(logId) && isValidActivityLog(incoming());
+
+      // Telemetry logs are captured as immutable audit trails. Direct updates are strictly blocked.
+      allow update: if false;
+
+      // A user can ONLY delete their own telemetry logs.
+      allow delete: if isOwner(existing().userId);
+    }
+
+    // 7. SECURITY KEYS RULES: Each user can only read, write, update, or delete their own dynamic keys.
+    match /api_keys/{keyId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isOwner(existing().userId);
+      allow create: if isValidId(keyId) && isValidApiKey(incoming());
+      allow update: if isOwner(existing().userId) && isValidApiKey(incoming()) && incoming().userId == existing().userId;
+      allow delete: if isOwner(existing().userId);
+    }
+
+    // 8. GLOBAL USER CONFIGURATION RULES: Settings are namespace-isolated by the path UID (userId).
+    // Each user can ONLY read or write to their own settings document.
+    match /user_settings/{userId} {
+      allow get: if isOwner(userId);
+      allow write: if isOwner(userId) && isValidUserSetting(incoming());
+    }
+
+    // 9. PERSONAL NOTES RULES: Each user can only read, write, update, or delete their own dynamic notes.
+    match /personal_notes/{noteId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isOwner(existing().userId);
+      allow create: if isValidId(noteId) && isValidPersonalNote(incoming());
+      allow update: if isOwner(existing().userId) && isValidPersonalNote(incoming()) && incoming().userId == existing().userId;
+      allow delete: if isOwner(existing().userId);
+    }
+  }
+}

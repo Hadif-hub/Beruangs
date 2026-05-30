@@ -1,0 +1,6 @@
+{
+  "name": "Auth Portal Landing Page",
+  "description": "A elegant light-themed security portal featuring a comprehensive interactive authentication module and responsive premium landing design.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
