@@ -291,9 +291,9 @@ function HomeView() {
             id="site-logo-container"
           >
             <BearLogo className="h-9 w-9" />
-            <span className="font-display text-xl sm:text-2xl font-black tracking-tight text-bear-dark">
+            <h1 className="font-display text-xl sm:text-2xl font-black tracking-tight text-bear-dark">
               Beruangs<span className="text-bear-brown">Bear</span>
-            </span>
+            </h1>
           </div>
 
           {/* Core Controls */}
