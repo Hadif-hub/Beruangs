@@ -35,15 +35,16 @@ service cloud.firestore {
 
     // 3. BEAR POST SCHEMA VALIDATOR
     function isValidBearPost(data) {
-      return data.keys().hasAll(['userId', 'userDisplayName', 'userPhotoURL', 'caption', 'imageUrl', 'isPublic', 'reactions', 'createdAt', 'updatedAt'])
-        && data.keys().size() == 9
+      return data.keys().hasAll(['userId', 'userDisplayName', 'userPhotoURL', 'caption', 'imageUrl', 'isPublic', 'reactions', 'createdAt', 'updatedAt', 'comments'])
+        && data.keys().size() == 10
         && isOwner(data.userId)
         && data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 150
         && data.userPhotoURL is string && data.userPhotoURL.size() <= 2000
         && data.caption is string && data.caption.size() <= 10000
-        && data.imageUrl is string && data.imageUrl.size() <= 2000
+        && data.imageUrl is string && data.imageUrl.size() <= 1000000
         && data.isPublic is bool
         && data.reactions is map
+        && data.comments is list && data.comments.size() <= 1000
         && data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64
         && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
@@ -59,11 +60,11 @@ service cloud.firestore {
 
       // Update:
       // Case A: Complete details update - Only author can change caption, title, visibility, etc.
-      // Case B: Emoji react updates - Any signed-in user can toggle reactions, altering only 'reactions' and 'updatedAt' fields.
+      // Case B: Emoji react and comment updates - Any signed-in user can toggle reactions or add comments, altering only specified fields.
       allow update: if (
         isSignedIn() && (
           (isOwner(existing().userId) && isValidBearPost(incoming()) && incoming().userId == existing().userId && incoming().createdAt == existing().createdAt) ||
-          (incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']) && incoming().userId == existing().userId && incoming().caption == existing().caption && incoming().imageUrl == existing().imageUrl && incoming().isPublic == existing().isPublic)
+          (incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'comments', 'updatedAt']) && incoming().userId == existing().userId && incoming().caption == existing().caption && incoming().imageUrl == existing().imageUrl && incoming().isPublic == existing().isPublic)
         )
       );
 

@@ -29,9 +29,14 @@ import {
   ArrowLeft,
   RefreshCw,
   Sparkles,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Upload,
+  Image as ImageIcon,
+  MessageSquare
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { BearComment } from "../types";
+import { compressAndResizeImage } from "../utils/image";
 
 interface BearEntity {
   id: string;
@@ -42,6 +47,7 @@ interface BearEntity {
   imageUrl: string;
   isPublic: boolean;
   reactions: { [key: string]: string[] };
+  comments?: BearComment[];
   createdAt: string;
   updatedAt: string;
 }
@@ -68,6 +74,53 @@ export default function Dashboard() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(BEAR_TEMPLATES[0].id);
   const [customUrlInput, setCustomUrlInput] = useState<string>("");
   const [isCustomUrlActive, setIsCustomUrlActive] = useState<boolean>(false);
+
+  // Drag & drop file upload states and handlers
+  const [uploadedImageBase64, setUploadedImageBase64] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [compressing, setCompressing] = useState<boolean>(false);
+
+  const processFile = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      setErrorMsg("Please upload a valid image file (PNG, JPG, HEIC, GIF).");
+      return;
+    }
+    try {
+      setCompressing(true);
+      setErrorMsg(null);
+      // Compress and resize to maximum 800 width, 600 height, keeping it small & fast
+      const base64 = await compressAndResizeImage(file, 800, 600, 0.7);
+      setUploadedImageBase64(base64);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg("Image optimization failed. Please choose another screenshot or file.");
+    } finally {
+      setCompressing(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      processFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      processFile(e.target.files[0]);
+    }
+  };
 
   // Editing state for existing entry
   const [editingEntry, setEditingEntry] = useState<BearEntity | null>(null);
@@ -97,6 +150,7 @@ export default function Dashboard() {
           imageUrl: d.imageUrl || "",
           isPublic: d.isPublic === undefined ? true : d.isPublic,
           reactions: d.reactions || {},
+          comments: d.comments || [],
           createdAt: d.createdAt || new Date().toISOString(),
           updatedAt: d.updatedAt || new Date().toISOString(),
         });
@@ -133,7 +187,7 @@ export default function Dashboard() {
       return;
     }
 
-    const finalImageUrl = isCustomUrlActive ? customUrlInput.trim() : imageUrl;
+    const finalImageUrl = uploadedImageBase64 || (isCustomUrlActive ? customUrlInput.trim() : imageUrl);
     if (!finalImageUrl) {
       setErrorMsg("Please provide an image for the bear!");
       return;
@@ -158,6 +212,7 @@ export default function Dashboard() {
           "🐟": [],
           "🌲": []
         },
+        comments: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -180,6 +235,7 @@ export default function Dashboard() {
       setCaption("");
       setCustomUrlInput("");
       setIsCustomUrlActive(false);
+      setUploadedImageBase64(null);
       setSelectedTemplateId(BEAR_TEMPLATES[0].id);
       setImageUrl(BEAR_TEMPLATES[0].imageUrl);
     } catch (err: any) {
@@ -237,6 +293,7 @@ export default function Dashboard() {
         caption: editCaption.trim(),
         imageUrl: editImageUrl.trim(),
         isPublic: editIsPublic,
+        comments: editingEntry.comments || [],
         updatedAt: new Date().toISOString()
       };
 
@@ -249,6 +306,7 @@ export default function Dashboard() {
         imageUrl: updatePayload.imageUrl,
         isPublic: updatePayload.isPublic,
         reactions: updatePayload.reactions,
+        comments: updatePayload.comments,
         createdAt: updatePayload.createdAt,
         updatedAt: updatePayload.updatedAt
       });
@@ -368,44 +426,127 @@ export default function Dashboard() {
               </h2>
 
               <form onSubmit={handleCreateEntry} className="space-y-5">
-                {/* Visual Image Selector */}
+                {/* Visual Image Selector (with Drag & Drop upload) */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-bold text-bear-dark/70 uppercase">Select Bear Cover Image</span>
+                    <span className="text-xs font-bold text-bear-dark/70 uppercase">Bear Cover Photo & Image</span>
                     <button
                       type="button"
-                      onClick={() => setIsCustomUrlActive(!isCustomUrlActive)}
-                      className="text-xs font-bold text-bear-brown hover:text-bear-dark flex items-center space-x-1"
+                      onClick={() => {
+                        setIsCustomUrlActive(!isCustomUrlActive);
+                        setUploadedImageBase64(null); // clear uploaded image to use url/preset
+                      }}
+                      className="text-xs font-bold text-bear-brown hover:text-bear-dark flex items-center space-x-1 cursor-pointer select-none"
                     >
                       <LinkIcon className="h-3 w-3" />
-                      <span>{isCustomUrlActive ? "Choose preset" : "Custom URL"}</span>
+                      <span>{isCustomUrlActive ? "Use file uploader" : "Paste custom URL"}</span>
                     </button>
                   </div>
 
                   {!isCustomUrlActive ? (
-                    <div className="grid grid-cols-3 gap-2">
-                      {BEAR_TEMPLATES.map((tpl) => (
-                        <div
-                          key={tpl.id}
-                          onClick={() => selectTemplate(tpl)}
-                          className={`group cursor-pointer rounded-xl overflow-hidden border-2 relative transition-all ${
-                            selectedTemplateId === tpl.id
-                              ? "border-bear-brown scale-95 shadow-md"
-                              : "border-transparent hover:border-bear-khaki/50"
-                          }`}
-                          title={`${tpl.title} (${tpl.category})`}
-                        >
-                          <img
-                            src={tpl.imageUrl}
-                            alt={tpl.title}
-                            className="h-14 w-full object-cover group-hover:scale-105 transition-transform"
-                          />
-                          <div className="absolute inset-0 bg-black/20" />
-                          <span className="absolute bottom-1 left-1.5 text-[9px] text-white font-bold tracking-wider uppercase bg-black/40 px-1 rounded">
-                            {tpl.category}
-                          </span>
+                    <div className="space-y-3.5">
+                      {/* Drag & Drop File Zone */}
+                      <div
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        className={`border-2 border-dashed rounded-2xl p-5 text-center transition-all relative flex flex-col items-center justify-center min-h-[160px] cursor-pointer bg-white ${
+                          isDragging
+                            ? "border-bear-brown bg-amber-50/20 scale-[0.98]"
+                            : uploadedImageBase64
+                            ? "border-emerald-500 bg-emerald-50/5"
+                            : "border-bear-latte/80 hover:border-bear-khaki hover:bg-bear-light/20"
+                        }`}
+                        onClick={() => document.getElementById("bear-file-upload")?.click()}
+                      >
+                        <input
+                          id="bear-file-upload"
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleFileChange}
+                        />
+
+                        {compressing ? (
+                          <div className="flex flex-col items-center space-y-2">
+                            <RefreshCw className="h-7 w-7 text-bear-brown animate-spin" />
+                            <span className="text-xs text-bear-khaki font-bold">Optimizing camera visual...</span>
+                          </div>
+                        ) : uploadedImageBase64 ? (
+                          <div className="w-full h-full flex flex-col items-center space-y-3">
+                            <div className="relative w-32 h-24 rounded-lg overflow-hidden border border-emerald-500/30">
+                              <img
+                                src={uploadedImageBase64}
+                                alt="Uploaded preview"
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div className="text-center">
+                              <span className="text-xs font-extrabold text-emerald-600 block">✓ Custom Photo Ready</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUploadedImageBase64(null);
+                                }}
+                                className="text-[10px] font-bold text-red-500 hover:text-red-700 mt-1 cursor-pointer"
+                              >
+                                Discard & use template presets
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center space-y-2 select-none">
+                            <div className="p-2.5 bg-bear-sand/50 rounded-full text-bear-brown">
+                              <Upload className="h-5 w-5" />
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-bear-dark">
+                                Drag & drop your bear photo here, or <span className="text-bear-brown underline">browse files</span>
+                              </p>
+                              <p className="text-[10px] text-neutral-400 font-semibold mt-0.5">
+                                PNG, JPG, GIF up to 5MB (fully compressed on-the-fly)
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Or Select from Presets Collapsible section */}
+                      {!uploadedImageBase64 && (
+                        <div>
+                          <p className="text-[10px] font-mono font-bold text-bear-khaki tracking-wider uppercase mb-1.5">
+                            Or select one of our premium field templates:
+                          </p>
+                          <div className="grid grid-cols-3 gap-2">
+                            {BEAR_TEMPLATES.map((tpl) => (
+                              <div
+                                key={tpl.id}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  selectTemplate(tpl);
+                                }}
+                                className={`group cursor-pointer rounded-xl overflow-hidden border-2 relative transition-all ${
+                                  selectedTemplateId === tpl.id
+                                    ? "border-bear-brown scale-95 shadow-md"
+                                    : "border-transparent hover:border-bear-khaki/50"
+                                }`}
+                                title={`${tpl.title} (${tpl.category})`}
+                              >
+                                <img
+                                  src={tpl.imageUrl}
+                                  alt={tpl.title}
+                                  className="h-14 w-full object-cover group-hover:scale-105 transition-transform"
+                                />
+                                <div className="absolute inset-0 bg-black/20" />
+                                <span className="absolute bottom-1 left-1.5 text-[9px] text-white font-bold tracking-wider uppercase bg-black/40 px-1 rounded">
+                                  {tpl.category}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      ))}
+                      )}
                     </div>
                   ) : (
                     <div>
@@ -637,21 +778,28 @@ export default function Dashboard() {
                             </p>
                           </div>
 
-                          {/* Reaction summary if public */}
+                          {/* Reaction & Comments summary if public */}
                           {entry.isPublic && (
-                            <div className="flex flex-wrap gap-1.5 mt-2.5">
+                            <div className="flex flex-wrap items-center gap-2 mt-2.5">
                               {(Object.entries(entry.reactions || {}) as [string, string[]][]).map(([emoji, uids]) => {
                                 if (uids.length === 0) return null;
                                 return (
                                   <span 
                                     key={emoji} 
-                                    className="bg-white px-2 py-0.5 rounded-lg border border-bear-latte text-[10px] font-mono text-bear-dark font-extrabold flex items-center gap-1.5"
+                                    className="bg-white px-2 py-0.5 rounded-lg border border-bear-latte text-[10px] font-mono text-bear-dark font-extrabold flex items-center gap-1"
                                   >
                                     <span>{emoji}</span>
                                     <span>{uids.length}</span>
                                   </span>
                                 );
                               })}
+
+                              {entry.comments && entry.comments.length > 0 && (
+                                <span className="bg-amber-50 px-2 py-0.5 rounded-lg border border-bear-brown/30 text-[10px] font-mono text-bear-dark font-extrabold flex items-center gap-1">
+                                  <MessageSquare className="h-3 w-3 text-bear-brown shrink-0" />
+                                  <span>{entry.comments.length}</span>
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>

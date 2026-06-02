@@ -33,6 +33,10 @@
           "type": "object",
           "description": "A map listing selected emojis paired to lists of user UIDs who reacted with that emoji (e.g., {'🐻': ['uid1', 'uid2']})."
         },
+        "comments": {
+          "type": "array",
+          "description": "A list of comment objects added by observers to this post."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -44,7 +48,7 @@
           "description": "ISO timestamp indicating when the post was last modified."
         }
       },
-      "required": ["userId", "userDisplayName", "userPhotoURL", "caption", "imageUrl", "isPublic", "createdAt", "updatedAt"]
+      "required": ["userId", "userDisplayName", "userPhotoURL", "caption", "imageUrl", "isPublic", "createdAt", "updatedAt", "comments"]
     }
   },
   "firestore": {

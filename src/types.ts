@@ -6,6 +6,15 @@ export interface User {
   emailVerified: boolean;
 }
 
+export interface BearComment {
+  id: string;
+  userId: string;
+  userDisplayName: string;
+  userPhotoURL: string | null;
+  text: string;
+  createdAt: string;
+}
+
 export interface AuthContextType {
   user: User | null;
   loading: boolean;

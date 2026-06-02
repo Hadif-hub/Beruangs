@@ -32,9 +32,14 @@ import {
   RefreshCw,
   X,
   ArrowRight,
-  UserCheck
+  UserCheck,
+  MessageSquare,
+  Send,
+  Smile
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { BearComment } from "./types";
+import PostCommentsSection from "./components/PostCommentsSection";
 
 // Local types
 interface BearPostEntity {
@@ -46,6 +51,7 @@ interface BearPostEntity {
   imageUrl: string;
   isPublic: boolean;
   reactions: { [key: string]: string[] };
+  comments?: BearComment[];
   createdAt: string;
   updatedAt: string;
 }
@@ -67,6 +73,7 @@ const DEFAULT_SEED_POSTS: BearPostEntity[] = [
       "🐟": ["u1", "u4", "u5"],
       "🌲": ["u2", "u3"]
     },
+    comments: [],
     createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
     updatedAt: new Date(Date.now() - 3600000 * 2).toISOString()
   },
@@ -85,8 +92,9 @@ const DEFAULT_SEED_POSTS: BearPostEntity[] = [
       "🐟": ["u4"],
       "🌲": []
     },
+    comments: [],
     createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-    updatedAt: new Date(Date.now() - 3600000 * 5).toISOString()
+    updatedAt: new Date(Date.now() - 3600005 * 5).toISOString()
   },
   {
     id: "seed-panda",
@@ -103,6 +111,7 @@ const DEFAULT_SEED_POSTS: BearPostEntity[] = [
       "🐟": [],
       "🌲": ["u2"]
     },
+    comments: [],
     createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
     updatedAt: new Date(Date.now() - 3600000 * 12).toISOString()
   }
@@ -132,6 +141,51 @@ function HomeView() {
   const [showAuthSidebar, setShowAuthSidebar] = useState(false);
   const [showAuthPromptModal, setShowAuthPromptModal] = useState(false);
 
+  // Expanded comments state
+  const [expandedPostIds, setExpandedPostIds] = useState<string[]>([]);
+  
+  const toggleCommentsExpanded = (postId: string) => {
+    setExpandedPostIds((prev) =>
+      prev.includes(postId) ? prev.filter((id) => id !== postId) : [...prev, postId]
+    );
+  };
+
+  // Add Comment Handler
+  const handleAddComment = async (postId: string, text: string) => {
+    if (!user) {
+      setShowAuthPromptModal(true);
+      return;
+    }
+    const targetPost = posts.find((p) => p.id === postId);
+    if (!targetPost) return;
+
+    const newComment = {
+      id: "comment-" + Math.random().toString(36).substring(2, 11),
+      userId: user.uid,
+      userDisplayName: user.displayName || "Bear Observer",
+      userPhotoURL: user.photoURL || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${user.uid}`,
+      text: text.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    const updatedComments = [...(targetPost.comments || []), newComment];
+
+    // Optimistic Update
+    setPosts((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, comments: updatedComments } : p))
+    );
+
+    try {
+      const postDocRef = doc(db, "bear_posts", postId);
+      await updateDoc(postDocRef, {
+        comments: updatedComments,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.warn("Firestore comment update skipped (pre-seeded post). Kept in local memory.", err.message);
+    }
+  };
+
   // Load public posts
   const loadPublicFeed = async () => {
     try {
@@ -152,6 +206,7 @@ function HomeView() {
           imageUrl: d.imageUrl || "",
           isPublic: true,
           reactions: d.reactions || {},
+          comments: d.comments || [],
           createdAt: d.createdAt || new Date().toISOString(),
           updatedAt: d.updatedAt || new Date().toISOString(),
         });
@@ -675,12 +730,36 @@ function HomeView() {
                             </button>
                           );
                         })}
+
+                        {/* Discussion Toggle Button */}
+                        <button
+                          onClick={() => toggleCommentsExpanded(post.id)}
+                          className={`px-3.5 py-1.5 text-xs font-bold rounded-xl border transition-all flex items-center space-x-1.5 cursor-pointer select-none ${
+                            expandedPostIds.includes(post.id)
+                              ? "bg-bear-brown text-white border-transparent shadow-xs"
+                              : "bg-bear-light border-bear-latte text-neutral-500 hover:text-bear-dark hover:border-bear-khaki/60"
+                          }`}
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          <span>Discuss ({post.comments?.length || 0})</span>
+                        </button>
                       </div>
 
                       <div className="text-[10px] text-bear-khaki font-semibold font-mono">
                         {(Object.values(post.reactions) as string[][]).reduce((acc, curr) => acc + curr.length, 0)} engagements
                       </div>
                     </div>
+
+                    {/* Discussion Comments Section Drawer */}
+                    <AnimatePresence>
+                      {expandedPostIds.includes(post.id) && (
+                        <PostCommentsSection
+                          post={post}
+                          user={user}
+                          onAddComment={(commentText) => handleAddComment(post.id, commentText)}
+                        />
+                      )}
+                    </AnimatePresence>
                   </motion.article>
                 ))}
               </div>
